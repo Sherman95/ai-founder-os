@@ -1,4 +1,4 @@
-# AI Founder OS - Production-Ready Basic Backend (v0.2.0 MCP Challenge)
+# AI Founder OS - Production-Ready Basic Backend (v0.2.1 Human-in-the-Loop)
 
 AI Founder OS is a production-ready basic backend that uses Notion as UI + database + memory.
 The system polls a Notion database for startup ideas with Status `Run` or `Queued`, executes a multi-agent workflow, and writes outputs into Notion databases:
@@ -13,6 +13,7 @@ This release adds MCP support in two directions:
 
 - Provider mode switch for Notion access: `NOTION_MODE=api|mcp`
 - Founder OS MCP server exposing high-level tools (`founder.*`)
+- Human-in-the-loop corrections loop for output rows flagged in Notion
 
 ## Stack
 
@@ -62,11 +63,16 @@ server/
       listIdeasToRun.js
       claimIdea.js
       runIdea.js
+      listReviews.js
+      applyCorrections.js
 prompts/
   ideaAnalyzer.md
   marketResearch.md
   productPlanner.md
   marketingAgent.md
+  competitorCorrection.md
+  roadmapCorrection.md
+  marketingCorrection.md
 README.md
 .env.example
 docs/
@@ -101,7 +107,10 @@ Copy `.env.example` to `.env` and fill values:
 - `NOTION_MCP_TOOL_UPSERT_MARKETING` (optional override)
 - `NOTION_MCP_TOOL_VALIDATE_SCHEMAS` (optional override)
 - `NOTION_MCP_TOOL_OUTPUT_COUNTS` (optional override)
+- `NOTION_MCP_TOOL_LIST_REVIEW_ITEMS` (optional override)
+- `NOTION_MCP_TOOL_UPDATE_OUTPUT_ITEM` (optional override)
 - `MCP_PORT` (default `7337`)
+- `DEMO_IDEA_PAGE_ID` (optional for `npm run demo:challenge`)
 - `POLL_INTERVAL_MS` (30000 to 120000 recommended)
 - `DISABLE_POLLER` (`true` or `false`)
 - `MAX_COMPETITORS` (default `5`)
@@ -134,6 +143,7 @@ npm run inspect:schemas
 npm run workflow:once -- <ideaPageId>
 npm run mcp
 npm run demo:mcp -- <ideaPageId>
+npm run demo:challenge -- <ideaPageId>
 npm run smoke
 ```
 
@@ -147,7 +157,7 @@ Example response:
 {
   "status": "ok",
   "time": "2026-03-21T10:00:00.000Z",
-  "version": "0.2.0"
+  "version": "0.2.1"
 }
 ```
 
@@ -177,6 +187,8 @@ Exposed tools:
 - `founder.list_ideas_to_run`
 - `founder.claim_idea`
 - `founder.run_idea`
+- `founder.list_reviews`
+- `founder.apply_corrections`
 
 VS Code MCP setup details are documented in `docs/VS_CODE_MCP_SETUP.md`.
 
@@ -225,6 +237,8 @@ Each output DB should have at minimum:
 Optional but recommended:
 
 - `Key` (rich text)
+- `Needs Review` / aliases: `Needs Review`, `Review`, `NeedsReview`, `Revisar`, `Needs review` (checkbox)
+- `Correction Notes` / aliases: `Correction Notes`, `Corrections`, `Notes`, `Correction`, `Notas`, `Notas de corrección` (rich text)
 
 Recommended fields:
 
@@ -242,6 +256,17 @@ Recommended fields:
 - If Gemini is rate-limited or unavailable, all generation agents use deterministic fallback paths so workflow can still complete.
 - Poller workflow claims each idea before processing to prevent duplicate processing across instances.
 - Startup runs schema validation against configured Notion DBs and exits fast when requirements are missing.
+- Corrections loop is idempotent by row + notes checksum and protected by in-process lock.
+
+## Human-in-the-loop corrections
+
+1. Generate outputs with `founder.run_idea` or poller workflow.
+2. In an output DB row, set `Needs Review` to checked and add `Correction Notes`.
+3. Run `founder.list_reviews` to inspect pending corrections.
+4. Run `founder.apply_corrections` to regenerate only flagged rows.
+5. Updated rows are unflagged (`Needs Review=false`) and correction notes are cleared.
+
+If review columns do not exist, the tools return zero items without crashing.
 
 ## Limits
 

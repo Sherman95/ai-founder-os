@@ -27,6 +27,34 @@ This release introduces MCP integration in two layers:
 - `founder.list_ideas_to_run`
 - `founder.claim_idea`
 - `founder.run_idea`
+- `founder.list_reviews`
+- `founder.apply_corrections`
+
+## Human-in-the-loop corrections
+
+Users can review generated rows directly in Notion and request targeted fixes.
+
+### Notion review fields (optional)
+
+- `Needs Review` (checkbox)
+- `Correction Notes` (rich text)
+
+If columns are missing, tools return 0 items gracefully.
+
+### Loop steps
+
+1. Generate outputs using `founder.run_idea`
+2. In Notion, flag one output row with `Needs Review = checked`
+3. Add instruction text in `Correction Notes`
+4. Run `founder.list_reviews`
+5. Run `founder.apply_corrections`
+6. Confirm row updated and unflagged
+
+### Screenshots placeholders
+
+- [Screenshot 1: Flagged row in Notion]
+- [Screenshot 2: founder.list_reviews output]
+- [Screenshot 3: founder.apply_corrections result]
 
 ## Setup
 
