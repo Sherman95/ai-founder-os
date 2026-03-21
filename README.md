@@ -1,6 +1,6 @@
-# AI Founder OS - MVP Day 1 Bootstrap
+# AI Founder OS - Production-Ready Basic Backend
 
-AI Founder OS is a demo-focused backend that uses Notion as UI + database + memory.
+AI Founder OS is a production-ready basic backend that uses Notion as UI + database + memory.
 The system polls a Notion database for startup ideas with Status `Run` or `Queued`, executes a multi-agent workflow, and writes outputs into Notion databases:
 
 - Competitor Research
@@ -67,6 +67,10 @@ Copy `.env.example` to `.env` and fill values:
 - `NOTION_MARKETING_DB_ID`
 - `GEMINI_API_KEY`
 - `POLL_INTERVAL_MS` (30000 to 120000 recommended)
+- `DISABLE_POLLER` (`true` or `false`)
+- `MAX_COMPETITORS` (default `5`)
+- `MAX_ROADMAP_ITEMS` (default `7`)
+- `MAX_MARKETING_ITEMS` (default `7`)
 
 Important:
 - Placeholder values in `.env.example` are intentionally invalid for runtime.
@@ -92,6 +96,7 @@ Operational scripts:
 ```bash
 npm run inspect:schemas
 npm run workflow:once -- <ideaPageId>
+npm run smoke
 ```
 
 ## Health check
@@ -113,6 +118,7 @@ Example response:
 1. In Notion Startup Ideas DB, create/update an idea.
 2. Set `Status` to `Run` (or `Queued`).
 3. Poller checks every `POLL_INTERVAL_MS`.
+  - Set `DISABLE_POLLER=true` to pause polling while keeping API alive.
 4. Workflow marks idea as `Running`.
 5. Agents produce:
    - Competitors
@@ -128,7 +134,7 @@ Example response:
 
 On failure, idea status becomes `Failed` and `Run Log` stores the error.
 
-## Required Notion properties (MVP)
+## Required Notion properties
 
 ### Startup Ideas DB
 
@@ -167,6 +173,15 @@ Recommended fields:
 - Upserts avoid duplicates using `Key`; if `Key` is missing, fallback matching uses `Source Idea + title`.
 - Gemini JSON output is validated by Zod with retry logic (2 retries max).
 - If Gemini is rate-limited or unavailable, `ideaAnalyzer` uses a deterministic fallback so workflow can still complete.
+- Poller workflow claims each idea before processing to prevent duplicate processing across instances.
+- Startup runs schema validation against configured Notion DBs and exits fast when requirements are missing.
+
+## Limits
+
+- This release is production-ready basic, not high-scale distributed orchestration.
+- Throughput is intentionally conservative (single in-process worker loop).
+- Output list sizes are bounded by env limits to control model cost.
+- Notion/Gemini API quota and network reliability still affect throughput.
 
 ## Demo script
 
