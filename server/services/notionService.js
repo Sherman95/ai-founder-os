@@ -4,7 +4,7 @@ const { Client } = require("@notionhq/client");
 const env = require("../config/env");
 
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
-const notion = new Client({ auth: env.NOTION_TOKEN });
+const notion = new Client({ auth: env.NOTION_TOKEN || env.NOTION_OAUTH_TOKEN });
 
 const dbTitleCache = new Map();
 const dataSourceCache = new Map();
@@ -421,6 +421,17 @@ async function queryStartupIdeasToRun() {
   }
 }
 
+async function getIdeaById(pageId) {
+  const page = await notion.pages.retrieve({ page_id: pageId });
+  return {
+    id: page.id,
+    title: getTitleValue(page),
+    description: getDescriptionValue(page),
+    status: getStatusValue(page),
+    rawPage: page,
+  };
+}
+
 async function updateIdeaStatus(pageId, status, extraProps = {}) {
   try {
     const statusMeta = await getStatusPropertyMeta(env.NOTION_STARTUP_IDEAS_DB_ID);
@@ -739,12 +750,48 @@ async function createOrUpsertMarketing(ideaPageId, marketingItems) {
   logger.info({ ts: new Date().toISOString(), ideaPageId, count: marketingItems.length }, "Upserted marketing items");
 }
 
+async function countOutputItemsForIdea(databaseId, ideaPageId) {
+  const props = await getCollectionProperties(databaseId);
+  const sourceMeta = findPropertyMeta(props, ["Source Idea", "Source"], [
+    "rich_text",
+    "title",
+    "select",
+    "multi_select",
+  ]);
+
+  if (!sourceMeta) {
+    return 0;
+  }
+
+  const sourceFilter = buildFilterByType(sourceMeta.name, sourceMeta.def.type, ideaPageId);
+  if (!sourceFilter) {
+    return 0;
+  }
+
+  const result = await queryCollection(databaseId, {
+    filter: sourceFilter,
+    page_size: 100,
+  });
+
+  return result.results.length;
+}
+
+async function getOutputCounts(ideaPageId) {
+  const competitors = await countOutputItemsForIdea(env.NOTION_COMPETITORS_DB_ID, ideaPageId);
+  const roadmap = await countOutputItemsForIdea(env.NOTION_ROADMAP_DB_ID, ideaPageId);
+  const marketing = await countOutputItemsForIdea(env.NOTION_MARKETING_DB_ID, ideaPageId);
+  return { competitors, roadmap, marketing };
+}
+
 module.exports = {
   queryStartupIdeasToRun,
+  getIdeaById,
   updateIdeaStatus,
   claimIdeaForRun,
   validateConfiguredSchemas,
+  inspectSchemas: validateConfiguredSchemas,
   createOrUpsertCompetitors,
   createOrUpsertRoadmap,
   createOrUpsertMarketing,
+  getOutputCounts,
 };

@@ -1,12 +1,12 @@
 const dotenv = require("dotenv");
 const { Client } = require("@notionhq/client");
 
-const notionService = require("../services/notionService");
+const notionProvider = require("../services/notionProvider");
 const { createWorkflowEngine } = require("../orchestrator/workflowEngine");
 
 dotenv.config();
 
-const notion = new Client({ auth: process.env.NOTION_TOKEN });
+const notion = new Client({ auth: process.env.NOTION_TOKEN || process.env.NOTION_OAUTH_TOKEN });
 
 function extractTitle(properties) {
   const titleProp = Object.values(properties || {}).find((v) => v?.type === "title");
@@ -42,7 +42,7 @@ async function main() {
     status: extractStatus(properties),
   };
 
-  const engine = createWorkflowEngine({ notionService });
+  const engine = createWorkflowEngine({ notionService: notionProvider });
   await engine.runWorkflow(idea);
   console.log("Workflow execution finished for:", pageId);
 }

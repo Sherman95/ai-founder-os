@@ -3,7 +3,7 @@ const path = require("path");
 const pino = require("pino");
 
 const env = require("../config/env");
-const notionService = require("../services/notionService");
+const notionProvider = require("../services/notionProvider");
 
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 
@@ -22,7 +22,7 @@ async function main() {
     throw new Error(`Missing prompt files: ${missingPrompts.join(", ")}`);
   }
 
-  await notionService.validateConfiguredSchemas();
+  await notionProvider.validateConfiguredSchemas();
 
   logger.info({ ts: new Date().toISOString() }, "Smoke checks passed");
 }

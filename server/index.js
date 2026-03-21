@@ -4,7 +4,7 @@ const pino = require("pino");
 
 const env = require("./config/env");
 const healthRoute = require("./routes/health");
-const notionService = require("./services/notionService");
+const notionProvider = require("./services/notionProvider");
 const { createWorkflowEngine } = require("./orchestrator/workflowEngine");
 const { createPoller } = require("./orchestrator/poller");
 
@@ -15,15 +15,15 @@ app.use(cors());
 app.use(express.json());
 app.use(healthRoute);
 
-const workflowEngine = createWorkflowEngine({ notionService });
+const workflowEngine = createWorkflowEngine({ notionService: notionProvider });
 const poller = createPoller({
   intervalMs: env.POLL_INTERVAL_MS,
-  queryFn: notionService.queryStartupIdeasToRun,
+  queryFn: notionProvider.queryStartupIdeasToRun,
   runFn: workflowEngine.runWorkflow,
 });
 
 async function bootstrap() {
-  await notionService.validateConfiguredSchemas();
+  await notionProvider.validateConfiguredSchemas();
 
   app.listen(env.PORT, () => {
     logger.info(
