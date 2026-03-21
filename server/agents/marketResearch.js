@@ -1,24 +1,51 @@
+const fs = require("fs");
+const path = require("path");
+
+const env = require("../config/env");
+const { generateJson, isQuotaError } = require("../services/geminiService");
 const { competitorListSchema } = require("../schemas/competitor.schema");
 
-async function marketResearch(analysis) {
-  const sample = [
+const promptPath = path.resolve(__dirname, "../../prompts/marketResearch.md");
+
+function buildFallbackCompetitors(analysis) {
+  const count = Math.min(env.MAX_COMPETITORS, 2);
+  const base = [
     {
       name: `${analysis.industry} Incumbent Suite`,
       pricing: "estimate: $49-$299/mo",
-      strengths: ["brand recognition", "large distribution"],
-      weaknesses: ["slower feature iteration", "legacy UX"],
+      strengths: ["brand recognition", "distribution"],
+      weaknesses: ["slower iteration", "legacy UX"],
       notes: "estimate",
     },
     {
       name: `${analysis.industry} Niche Challenger`,
       pricing: "unknown",
-      strengths: ["focused use case", "better onboarding"],
-      weaknesses: ["limited integrations", "small team"],
+      strengths: ["focused onboarding", "fast shipping"],
+      weaknesses: ["small brand", "limited integrations"],
       notes: "unknown",
     },
   ];
 
-  return competitorListSchema.parse(sample);
+  return competitorListSchema.parse(base.slice(0, count));
+}
+
+async function marketResearch(analysis) {
+  const systemPrompt = fs.readFileSync(promptPath, "utf8");
+  const prompt = `${systemPrompt}\n\nCONSTRAINT: Return at most ${env.MAX_COMPETITORS} competitors.\n\nINPUT:\n${JSON.stringify(
+    analysis,
+    null,
+    2
+  )}`;
+
+  try {
+    const generated = await generateJson({ prompt, schema: competitorListSchema });
+    return competitorListSchema.parse(generated.slice(0, env.MAX_COMPETITORS));
+  } catch (error) {
+    if (isQuotaError(error)) {
+      return buildFallbackCompetitors(analysis);
+    }
+    throw error;
+  }
 }
 
 module.exports = {

@@ -1,28 +1,55 @@
+const fs = require("fs");
+const path = require("path");
+
+const env = require("../config/env");
+const { generateJson, isQuotaError } = require("../services/geminiService");
 const { marketingListSchema } = require("../schemas/marketing.schema");
 
-async function marketingAgent(analysis) {
-  const items = [
+const promptPath = path.resolve(__dirname, "../../prompts/marketingAgent.md");
+
+function buildFallbackMarketing(analysis) {
+  const count = Math.min(env.MAX_MARKETING_ITEMS, 3);
+  const base = [
     {
       channel: "LinkedIn",
-      strategy: `Founder-led thought leadership in ${analysis.industry}`,
-      contentIdea: "Weekly teardown of customer pain points and wins",
+      strategy: `Founder-led insights about ${analysis.industry}`,
+      contentIdea: "Weekly problem/solution post with concrete lessons",
       priority: "High",
     },
     {
       channel: "SEO",
-      strategy: `Problem-solution landing pages for ${analysis.targetUsers}`,
-      contentIdea: "Comparison pages vs alternatives with ROI calculators",
+      strategy: `High-intent content for ${analysis.targetUsers}`,
+      contentIdea: "Comparison and alternatives page with CTA",
       priority: "Medium",
     },
     {
       channel: "Email",
-      strategy: "Lifecycle nurture based on user intent",
-      contentIdea: "3-email educational sequence with CTA to demo",
+      strategy: "Lifecycle nurture for activation",
+      contentIdea: "3-email onboarding educational sequence",
       priority: "Medium",
     },
   ];
 
-  return marketingListSchema.parse(items);
+  return marketingListSchema.parse(base.slice(0, count));
+}
+
+async function marketingAgent(analysis) {
+  const systemPrompt = fs.readFileSync(promptPath, "utf8");
+  const prompt = `${systemPrompt}\n\nCONSTRAINT: Return at most ${env.MAX_MARKETING_ITEMS} marketing items.\n\nINPUT:\n${JSON.stringify(
+    analysis,
+    null,
+    2
+  )}`;
+
+  try {
+    const generated = await generateJson({ prompt, schema: marketingListSchema });
+    return marketingListSchema.parse(generated.slice(0, env.MAX_MARKETING_ITEMS));
+  } catch (error) {
+    if (isQuotaError(error)) {
+      return buildFallbackMarketing(analysis);
+    }
+    throw error;
+  }
 }
 
 module.exports = {
