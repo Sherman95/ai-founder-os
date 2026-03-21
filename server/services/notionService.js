@@ -8,6 +8,8 @@ const notion = new Client({ auth: env.NOTION_TOKEN });
 
 const dbTitleCache = new Map();
 const dataSourceCache = new Map();
+const statusPropertyCache = new Map();
+const collectionPropertiesCache = new Map();
 
 function asRichText(value) {
   return {
@@ -43,11 +45,110 @@ function buildKey(ideaPageId, type, name) {
   return `${ideaPageId}:${type}:${sanitizeKeyPart(name)}`;
 }
 
+function normalizePropertyName(name) {
+  return String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function findPropertyMeta(properties, candidateNames, allowedTypes = null) {
+  const normalizedCandidates = (candidateNames || []).map(normalizePropertyName);
+  const entries = Object.entries(properties || {});
+
+  for (const [name, def] of entries) {
+    const isNameMatch = normalizedCandidates.includes(normalizePropertyName(name));
+    const isTypeMatch = !allowedTypes || allowedTypes.includes(def.type);
+    if (isNameMatch && isTypeMatch) {
+      return { name, def };
+    }
+  }
+
+  return null;
+}
+
+function buildFilterByType(propertyName, propertyType, value) {
+  if (propertyType === "title") {
+    return { property: propertyName, title: { equals: String(value).slice(0, 200) } };
+  }
+  if (propertyType === "rich_text") {
+    return { property: propertyName, rich_text: { equals: String(value).slice(0, 2000) } };
+  }
+  if (propertyType === "select") {
+    return { property: propertyName, select: { equals: String(value) } };
+  }
+  if (propertyType === "multi_select") {
+    return { property: propertyName, multi_select: { contains: String(value) } };
+  }
+
+  return null;
+}
+
+function toNotionPropertyValue(def, value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (def.type === "title") {
+    return asTitle(value);
+  }
+
+  if (def.type === "rich_text") {
+    return asRichText(value);
+  }
+
+  if (def.type === "number") {
+    const num = Number(value);
+    return Number.isFinite(num) ? { number: num } : null;
+  }
+
+  if (def.type === "select") {
+    const selectValue = String(value).trim();
+    if (!selectValue) {
+      return null;
+    }
+
+    const options = def.select?.options || [];
+    if (options.length && !options.some((o) => o.name === selectValue)) {
+      return null;
+    }
+    return { select: { name: selectValue } };
+  }
+
+  if (def.type === "multi_select") {
+    const values = Array.isArray(value) ? value : [value];
+    const names = values.map((v) => String(v).trim()).filter(Boolean);
+    if (!names.length) {
+      return null;
+    }
+
+    const options = def.multi_select?.options || [];
+    const allowed =
+      options.length > 0 ? names.filter((name) => options.some((o) => o.name === name)) : names;
+    if (!allowed.length) {
+      return null;
+    }
+    return { multi_select: allowed.map((name) => ({ name })) };
+  }
+
+  if (def.type === "date") {
+    return { date: { start: String(value) } };
+  }
+
+  return null;
+}
+
 function getStatusValue(page) {
   const properties = page.properties || {};
   for (const key of Object.keys(properties)) {
     if (properties[key]?.type === "status") {
       return properties[key]?.status?.name || null;
+    }
+    if (properties[key]?.type === "select") {
+      return properties[key]?.select?.name || null;
+    }
+    if (properties[key]?.type === "multi_select") {
+      return properties[key]?.multi_select?.[0]?.name || null;
     }
   }
   return null;
@@ -79,13 +180,17 @@ function getDescriptionValue(page) {
   return "";
 }
 
+function findFirstExistingPropertyName(properties, candidates) {
+  return candidates.find((name) => Object.prototype.hasOwnProperty.call(properties, name)) || null;
+}
+
 async function getTitlePropertyName(databaseId) {
   if (dbTitleCache.has(databaseId)) {
     return dbTitleCache.get(databaseId);
   }
 
-  const db = await notion.databases.retrieve({ database_id: databaseId });
-  const titlePropName = Object.keys(db.properties).find((name) => db.properties[name].type === "title");
+  const properties = await getCollectionProperties(databaseId);
+  const titlePropName = Object.keys(properties).find((name) => properties[name].type === "title");
 
   if (!titlePropName) {
     throw new Error(`No title property found in database ${databaseId}`);
@@ -93,6 +198,96 @@ async function getTitlePropertyName(databaseId) {
 
   dbTitleCache.set(databaseId, titlePropName);
   return titlePropName;
+}
+
+async function getDatabaseProperties(databaseId) {
+  const db = await notion.databases.retrieve({ database_id: databaseId });
+  return db.properties || {};
+}
+
+async function getCollectionProperties(databaseId) {
+  if (collectionPropertiesCache.has(databaseId)) {
+    return collectionPropertiesCache.get(databaseId);
+  }
+
+  const dbProps = await getDatabaseProperties(databaseId);
+  if (Object.keys(dbProps).length > 0) {
+    collectionPropertiesCache.set(databaseId, dbProps);
+    return dbProps;
+  }
+
+  if (typeof notion.dataSources?.retrieve === "function") {
+    const dataSourceId = await resolveDataSourceId(databaseId);
+    const ds = await notion.dataSources.retrieve({ data_source_id: dataSourceId });
+    const dsProps = ds.properties || {};
+    collectionPropertiesCache.set(databaseId, dsProps);
+    return dsProps;
+  }
+
+  collectionPropertiesCache.set(databaseId, dbProps);
+  return dbProps;
+}
+
+async function getStatusPropertyMeta(databaseId) {
+  if (statusPropertyCache.has(databaseId)) {
+    return statusPropertyCache.get(databaseId);
+  }
+
+  const properties = await getCollectionProperties(databaseId);
+  const statusTypes = new Set(["status", "select", "multi_select"]);
+
+  const explicitStatus = properties.Status;
+  if (explicitStatus && statusTypes.has(explicitStatus.type)) {
+    const meta = { name: "Status", type: explicitStatus.type };
+    statusPropertyCache.set(databaseId, meta);
+    return meta;
+  }
+
+  const byName = Object.entries(properties).find(([name, def]) => {
+    const normalized = name.toLowerCase();
+    return (normalized.includes("status") || normalized.includes("estado")) && statusTypes.has(def.type);
+  });
+
+  if (byName) {
+    const meta = { name: byName[0], type: byName[1].type };
+    statusPropertyCache.set(databaseId, meta);
+    return meta;
+  }
+
+  const byType = Object.entries(properties).find(([, def]) => statusTypes.has(def.type));
+  if (byType) {
+    const meta = { name: byType[0], type: byType[1].type };
+    statusPropertyCache.set(databaseId, meta);
+    return meta;
+  }
+
+  throw new Error(`No status/select/multi_select workflow property found in database ${databaseId}`);
+}
+
+function buildStatusFilter(propertyName, propertyType, value) {
+  if (propertyType === "status") {
+    return { property: propertyName, status: { equals: value } };
+  }
+  if (propertyType === "select") {
+    return { property: propertyName, select: { equals: value } };
+  }
+  if (propertyType === "multi_select") {
+    return { property: propertyName, multi_select: { contains: value } };
+  }
+  throw new Error(`Unsupported status property type: ${propertyType}`);
+}
+
+function buildStatusUpdateProperty(propertyType, value) {
+  if (propertyType === "status") {
+    return { status: { name: value } };
+  }
+  if (propertyType === "select") {
+    return { select: { name: value } };
+  }
+  if (propertyType === "multi_select") {
+    return { multi_select: [{ name: value }] };
+  }
+  throw new Error(`Unsupported status property type: ${propertyType}`);
 }
 
 async function resolveDataSourceId(databaseId) {
@@ -139,12 +334,39 @@ async function createPageInCollection(databaseId, properties) {
 }
 
 async function findByKey(databaseId, key) {
+  const props = await getCollectionProperties(databaseId);
+  const keyMeta = findPropertyMeta(props, ["Key"], ["rich_text", "title"]);
+  if (!keyMeta) {
+    return null;
+  }
+
+  const keyFilter = buildFilterByType(keyMeta.name, keyMeta.def.type, key);
+  if (!keyFilter) {
+    return null;
+  }
+
+  const result = await queryCollection(databaseId, {
+    filter: keyFilter,
+    page_size: 1,
+  });
+
+  return result.results[0] || null;
+}
+
+async function findBySourceAndTitle(databaseId, sourceMeta, ideaPageId, titleMeta, name) {
+  if (!sourceMeta || !titleMeta) {
+    return null;
+  }
+
+  const sourceFilter = buildFilterByType(sourceMeta.name, sourceMeta.def.type, ideaPageId);
+  const titleFilter = buildFilterByType(titleMeta.name, titleMeta.def.type, name);
+  if (!sourceFilter || !titleFilter) {
+    return null;
+  }
+
   const result = await queryCollection(databaseId, {
     filter: {
-      property: "Key",
-      rich_text: {
-        equals: key,
-      },
+      and: [sourceFilter, titleFilter],
     },
     page_size: 1,
   });
@@ -154,21 +376,12 @@ async function findByKey(databaseId, key) {
 
 async function queryStartupIdeasToRun() {
   try {
+    const statusMeta = await getStatusPropertyMeta(env.NOTION_STARTUP_IDEAS_DB_ID);
     const result = await queryCollection(env.NOTION_STARTUP_IDEAS_DB_ID, {
       filter: {
         or: [
-          {
-            property: "Status",
-            status: {
-              equals: "Run",
-            },
-          },
-          {
-            property: "Status",
-            status: {
-              equals: "Queued",
-            },
-          },
+          buildStatusFilter(statusMeta.name, statusMeta.type, "Run"),
+          buildStatusFilter(statusMeta.name, statusMeta.type, "Queued"),
         ],
       },
       sorts: [{ timestamp: "last_edited_time", direction: "ascending" }],
@@ -192,20 +405,40 @@ async function queryStartupIdeasToRun() {
 
 async function updateIdeaStatus(pageId, status, extraProps = {}) {
   try {
+    const statusMeta = await getStatusPropertyMeta(env.NOTION_STARTUP_IDEAS_DB_ID);
+    const startupProps = await getCollectionProperties(env.NOTION_STARTUP_IDEAS_DB_ID);
     const properties = {
-      Status: { status: { name: status } },
+      [statusMeta.name]: buildStatusUpdateProperty(statusMeta.type, status),
     };
 
     if (typeof extraProps.score === "number") {
-      properties["Startup Viability Score"] = { number: extraProps.score };
+      const scoreName = findFirstExistingPropertyName(startupProps, [
+        "Startup Viability Score",
+        "Viability Score",
+        "Score",
+      ]);
+      if (scoreName) {
+        const scoreType = startupProps[scoreName]?.type;
+        if (scoreType === "number") {
+          properties[scoreName] = { number: extraProps.score };
+        } else if (scoreType === "rich_text") {
+          properties[scoreName] = asRichText(extraProps.score);
+        }
+      }
     }
 
     if (extraProps.summary) {
-      properties["Executive Summary"] = asRichText(extraProps.summary);
+      const summaryName = findFirstExistingPropertyName(startupProps, ["Executive Summary", "Summary"]);
+      if (summaryName && startupProps[summaryName]?.type === "rich_text") {
+        properties[summaryName] = asRichText(extraProps.summary);
+      }
     }
 
     if (extraProps.runLog) {
-      properties["Run Log"] = asRichText(extraProps.runLog);
+      const runLogName = findFirstExistingPropertyName(startupProps, ["Run Log", "Logs"]);
+      if (runLogName && startupProps[runLogName]?.type === "rich_text") {
+        properties[runLogName] = asRichText(extraProps.runLog);
+      }
     }
 
     await notion.pages.update({
@@ -222,15 +455,54 @@ async function updateIdeaStatus(pageId, status, extraProps = {}) {
 
 async function upsertOutputItem(databaseId, ideaPageId, type, name, fieldMap) {
   const key = buildKey(ideaPageId, type, name);
+  const collectionProps = await getCollectionProperties(databaseId);
   const titleProperty = await getTitlePropertyName(databaseId);
-  const existing = await findByKey(databaseId, key);
+  const titleMeta = { name: titleProperty, def: collectionProps[titleProperty] };
+  const keyMeta = findPropertyMeta(collectionProps, ["Key"], ["rich_text", "title"]);
+  const sourceMeta = findPropertyMeta(collectionProps, ["Source Idea", "Source"], [
+    "rich_text",
+    "title",
+    "select",
+    "multi_select",
+  ]);
+
+  let existing = null;
+  if (keyMeta) {
+    existing = await findByKey(databaseId, key);
+  }
+  if (!existing) {
+    existing = await findBySourceAndTitle(databaseId, sourceMeta, ideaPageId, titleMeta, name);
+  }
 
   const properties = {
     [titleProperty]: asTitle(name),
-    Key: asRichText(key),
-    "Source Idea": asRichText(ideaPageId),
-    ...fieldMap,
   };
+
+  if (keyMeta) {
+    const keyValue = toNotionPropertyValue(keyMeta.def, key);
+    if (keyValue) {
+      properties[keyMeta.name] = keyValue;
+    }
+  }
+
+  if (sourceMeta) {
+    const sourceValue = toNotionPropertyValue(sourceMeta.def, ideaPageId);
+    if (sourceValue) {
+      properties[sourceMeta.name] = sourceValue;
+    }
+  }
+
+  for (const field of fieldMap) {
+    const meta = findPropertyMeta(collectionProps, field.aliases, field.allowedTypes || null);
+    if (!meta) {
+      continue;
+    }
+
+    const notionValue = toNotionPropertyValue(meta.def, field.value);
+    if (notionValue) {
+      properties[meta.name] = notionValue;
+    }
+  }
 
   if (existing) {
     await notion.pages.update({ page_id: existing.id, properties });
@@ -244,12 +516,14 @@ async function upsertOutputItem(databaseId, ideaPageId, type, name, fieldMap) {
 
 async function createOrUpsertCompetitors(ideaPageId, competitors) {
   for (const competitor of competitors) {
-    const fieldMap = {
-      Pricing: asRichText(competitor.pricing || "unknown"),
-      Strengths: asRichText((competitor.strengths || []).join(", ") || "unknown"),
-      Weaknesses: asRichText((competitor.weaknesses || []).join(", ") || "unknown"),
-      Notes: asRichText(competitor.notes || "estimate"),
-    };
+    const fieldMap = [
+      { aliases: ["Pricing"], value: competitor.pricing || "unknown" },
+      { aliases: ["Strengths"], value: (competitor.strengths || []).join(", ") || "unknown" },
+      { aliases: ["Weaknesses"], value: (competitor.weaknesses || []).join(", ") || "unknown" },
+      { aliases: ["Notes"], value: competitor.notes || "estimate" },
+      { aliases: ["Market"], value: competitor.market || "unknown" },
+      { aliases: ["Website"], value: competitor.website || "unknown" },
+    ];
 
     await upsertOutputItem(
       env.NOTION_COMPETITORS_DB_ID,
@@ -265,11 +539,23 @@ async function createOrUpsertCompetitors(ideaPageId, competitors) {
 
 async function createOrUpsertRoadmap(ideaPageId, roadmapItems) {
   for (const item of roadmapItems) {
-    const fieldMap = {
-      Priority: asRichText(item.priority),
-      Complexity: asRichText(item.complexity),
-      Status: asRichText(item.status || "Planned"),
-    };
+    const fieldMap = [
+      {
+        aliases: ["Priority"],
+        value: item.priority,
+        allowedTypes: ["select", "multi_select", "rich_text"],
+      },
+      {
+        aliases: ["Status"],
+        value: item.status || "Planned",
+        allowedTypes: ["select", "multi_select", "status", "rich_text"],
+      },
+      {
+        aliases: ["Description"],
+        value: `Complexity: ${item.complexity}`,
+        allowedTypes: ["rich_text"],
+      },
+    ];
 
     await upsertOutputItem(env.NOTION_ROADMAP_DB_ID, ideaPageId, "roadmap", item.feature, fieldMap);
   }
@@ -280,12 +566,21 @@ async function createOrUpsertRoadmap(ideaPageId, roadmapItems) {
 async function createOrUpsertMarketing(ideaPageId, marketingItems) {
   for (const item of marketingItems) {
     const name = `${item.channel} - ${item.strategy}`;
-    const fieldMap = {
-      Channel: asRichText(item.channel),
-      Strategy: asRichText(item.strategy),
-      "Content Idea": asRichText(item.contentIdea),
-      Priority: asRichText(item.priority),
-    };
+    const fieldMap = [
+      { aliases: ["Channel"], value: item.channel },
+      { aliases: ["Strategy"], value: item.strategy },
+      { aliases: ["Content Idea", "Campaign Idea"], value: item.contentIdea },
+      {
+        aliases: ["Priority"],
+        value: item.priority,
+        allowedTypes: ["select", "multi_select", "rich_text"],
+      },
+      {
+        aliases: ["Seleccionar"],
+        value: item.contentIdea,
+        allowedTypes: ["select", "multi_select"],
+      },
+    ];
 
     await upsertOutputItem(env.NOTION_MARKETING_DB_ID, ideaPageId, "marketing", name, fieldMap);
   }

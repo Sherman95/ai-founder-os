@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "nodemon server/index.js",
     "start": "node server/index.js",
+    "inspect:schemas": "node server/scripts/inspectNotionSchemas.js",
+    "workflow:once": "node server/scripts/runWorkflowOnce.js",
     "test": "echo \"No tests configured yet\""
   },
   "keywords": [],
