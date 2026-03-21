@@ -43,6 +43,9 @@ server/
     competitor.schema.js
     roadmap.schema.js
     marketing.schema.js
+  scripts/
+    inspectNotionSchemas.js
+    runWorkflowOnce.js
 prompts/
   ideaAnalyzer.md
   marketResearch.md
@@ -84,6 +87,13 @@ Production mode:
 npm run start
 ```
 
+Operational scripts:
+
+```bash
+npm run inspect:schemas
+npm run workflow:once -- <ideaPageId>
+```
+
 ## Health check
 
 `GET /health`
@@ -110,6 +120,7 @@ Example response:
    - Marketing items
 6. Notion output DBs are upserted with idempotency key:
    - `Key = ${ideaPageId}:${type}:${name}`
+  - If `Key` does not exist in a target DB, fallback upsert is done by `Source Idea + title`.
 7. Idea is updated to `Done` with:
    - `Startup Viability Score`
    - `Executive Summary`
@@ -121,10 +132,13 @@ On failure, idea status becomes `Failed` and `Run Log` stores the error.
 
 ### Startup Ideas DB
 
-- `Status` (status)
-- `Startup Viability Score` (number)
-- `Executive Summary` (rich text)
-- `Run Log` (rich text)
+- Workflow status property named like `Status` or `Estado` with one of these types:
+  - `status`
+  - `select`
+  - `multi_select`
+- Optional: `Startup Viability Score` / `Score` (number or rich text)
+- Optional: `Executive Summary` / `Summary` (rich text)
+- Optional: `Run Log` / `Logs` (rich text)
 - A title property for idea name
 - Optional description rich text property
 
@@ -133,8 +147,11 @@ On failure, idea status becomes `Failed` and `Run Log` stores the error.
 Each output DB should have at minimum:
 
 - Title property
-- `Key` (rich text)
 - `Source Idea` (rich text)
+
+Optional but recommended:
+
+- `Key` (rich text)
 
 Recommended fields:
 
@@ -147,8 +164,9 @@ Recommended fields:
 - Poller processes one idea at a time (MVP rate-limit safe).
 - Poller skips if a workflow is already running.
 - Workflow skips ideas already marked `Running`.
-- Upserts avoid duplicates using `Key` lookups.
+- Upserts avoid duplicates using `Key`; if `Key` is missing, fallback matching uses `Source Idea + title`.
 - Gemini JSON output is validated by Zod with retry logic (2 retries max).
+- If Gemini is rate-limited or unavailable, `ideaAnalyzer` uses a deterministic fallback so workflow can still complete.
 
 ## Demo script
 
