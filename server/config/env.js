@@ -36,6 +36,8 @@ const envSchema = z.object({
   NOTION_MCP_TOOL_UPSERT_MARKETING: z.string().optional(),
   NOTION_MCP_TOOL_VALIDATE_SCHEMAS: z.string().optional(),
   NOTION_MCP_TOOL_OUTPUT_COUNTS: z.string().optional(),
+  NOTION_MCP_TOOL_LIST_REVIEW_ITEMS: z.string().optional(),
+  NOTION_MCP_TOOL_UPDATE_OUTPUT_ITEM: z.string().optional(),
   NOTION_STARTUP_IDEAS_DB_ID: notionDbIdSchema.refine(
     (value) => value !== "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
     "NOTION_STARTUP_IDEAS_DB_ID must be replaced with a real value"

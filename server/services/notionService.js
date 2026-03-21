@@ -1,5 +1,6 @@
 const pino = require("pino");
 const { Client } = require("@notionhq/client");
+const crypto = require("crypto");
 
 const env = require("../config/env");
 
@@ -10,6 +11,16 @@ const dbTitleCache = new Map();
 const dataSourceCache = new Map();
 const statusPropertyCache = new Map();
 const collectionPropertiesCache = new Map();
+
+const NEEDS_REVIEW_ALIASES = ["Needs Review", "Review", "NeedsReview", "Revisar", "Needs review"];
+const CORRECTION_NOTES_ALIASES = [
+  "Correction Notes",
+  "Corrections",
+  "Notes",
+  "Correction",
+  "Notas",
+  "Notas de corrección",
+];
 
 function asRichText(value) {
   return {
@@ -100,6 +111,10 @@ function toNotionPropertyValue(def, value) {
   if (def.type === "number") {
     const num = Number(value);
     return Number.isFinite(num) ? { number: num } : null;
+  }
+
+  if (def.type === "checkbox") {
+    return { checkbox: Boolean(value) };
   }
 
   if (def.type === "select") {
@@ -200,6 +215,145 @@ function getDescriptionValue(page) {
 
 function findFirstExistingPropertyName(properties, candidates) {
   return candidates.find((name) => Object.prototype.hasOwnProperty.call(properties, name)) || null;
+}
+
+function extractPlainTextByProperty(property) {
+  if (!property) {
+    return "";
+  }
+
+  if (property.type === "title") {
+    return (property.title || []).map((v) => v.plain_text || "").join(" ").trim();
+  }
+
+  if (property.type === "rich_text") {
+    return (property.rich_text || []).map((v) => v.plain_text || "").join(" ").trim();
+  }
+
+  if (property.type === "select") {
+    return property.select?.name || "";
+  }
+
+  if (property.type === "multi_select") {
+    return (property.multi_select || []).map((v) => v.name).filter(Boolean).join(", ");
+  }
+
+  if (property.type === "status") {
+    return property.status?.name || "";
+  }
+
+  if (property.type === "checkbox") {
+    return property.checkbox ? "true" : "false";
+  }
+
+  if (property.type === "number") {
+    return Number.isFinite(property.number) ? String(property.number) : "";
+  }
+
+  return "";
+}
+
+function extractCheckboxByProperty(property) {
+  if (!property) {
+    return false;
+  }
+
+  if (property.type === "checkbox") {
+    return Boolean(property.checkbox);
+  }
+
+  if (property.type === "select") {
+    return String(property.select?.name || "").toLowerCase() === "true";
+  }
+
+  if (property.type === "multi_select") {
+    return (property.multi_select || []).some((v) => String(v.name || "").toLowerCase() === "true");
+  }
+
+  return false;
+}
+
+function parseListValue(value) {
+  return String(value || "")
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function coerceEnumValue(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback;
+}
+
+function getOutputDatabaseIdByType(type) {
+  if (type === "competitor") {
+    return env.NOTION_COMPETITORS_DB_ID;
+  }
+  if (type === "roadmap") {
+    return env.NOTION_ROADMAP_DB_ID;
+  }
+  if (type === "marketing") {
+    return env.NOTION_MARKETING_DB_ID;
+  }
+  throw new Error(`Unsupported review type: ${type}`);
+}
+
+function buildFieldMapForType(type, item) {
+  if (type === "competitor") {
+    return [
+      { aliases: ["Pricing"], value: item.pricing || "unknown" },
+      { aliases: ["Strengths"], value: (item.strengths || []).join(", ") || "unknown" },
+      { aliases: ["Weaknesses"], value: (item.weaknesses || []).join(", ") || "unknown" },
+      { aliases: ["Notes"], value: item.notes || "" },
+      { aliases: ["Market"], value: item.market || "" },
+      { aliases: ["Website"], value: item.website || "" },
+    ];
+  }
+
+  if (type === "roadmap") {
+    return [
+      {
+        aliases: ["Priority"],
+        value: item.priority,
+        allowedTypes: ["select", "multi_select", "rich_text"],
+      },
+      {
+        aliases: ["Status"],
+        value: item.status || "Planned",
+        allowedTypes: ["select", "multi_select", "status", "rich_text"],
+      },
+      {
+        aliases: ["Complexity"],
+        value: item.complexity,
+        allowedTypes: ["select", "multi_select", "rich_text"],
+      },
+      {
+        aliases: ["Description"],
+        value: `Complexity: ${item.complexity || "Medium"}`,
+        allowedTypes: ["rich_text"],
+      },
+    ];
+  }
+
+  if (type === "marketing") {
+    return [
+      { aliases: ["Channel"], value: item.channel },
+      { aliases: ["Strategy"], value: item.strategy },
+      { aliases: ["Content Idea", "Campaign Idea"], value: item.contentIdea },
+      {
+        aliases: ["Priority"],
+        value: item.priority,
+        allowedTypes: ["select", "multi_select", "rich_text"],
+      },
+      {
+        aliases: ["Seleccionar"],
+        value: item.contentIdea,
+        allowedTypes: ["select", "multi_select"],
+      },
+    ];
+  }
+
+  throw new Error(`Unsupported field-map type: ${type}`);
 }
 
 async function getTitlePropertyName(databaseId) {
@@ -615,7 +769,29 @@ async function validateConfiguredSchemas() {
   }
 }
 
-async function upsertOutputItem(databaseId, ideaPageId, type, name, fieldMap) {
+function applyReviewPropertiesToPayload(collectionProps, properties, reviewState = null) {
+  if (!reviewState) {
+    return;
+  }
+
+  const reviewMeta = findPropertyMeta(collectionProps, NEEDS_REVIEW_ALIASES, ["checkbox"]);
+  if (reviewMeta) {
+    const notionValue = toNotionPropertyValue(reviewMeta.def, reviewState.needsReview === true ? true : false);
+    if (notionValue) {
+      properties[reviewMeta.name] = notionValue;
+    }
+  }
+
+  const notesMeta = findPropertyMeta(collectionProps, CORRECTION_NOTES_ALIASES, ["rich_text", "title"]);
+  if (notesMeta) {
+    const notesValue = toNotionPropertyValue(notesMeta.def, reviewState.correctionNotes || "");
+    if (notesValue) {
+      properties[notesMeta.name] = notesValue;
+    }
+  }
+}
+
+async function upsertOutputItem(databaseId, ideaPageId, type, name, fieldMap, reviewState = null) {
   const key = buildKey(ideaPageId, type, name);
   const collectionProps = await getCollectionProperties(databaseId);
   const titleProperty = await getTitlePropertyName(databaseId);
@@ -666,6 +842,8 @@ async function upsertOutputItem(databaseId, ideaPageId, type, name, fieldMap) {
     }
   }
 
+  applyReviewPropertiesToPayload(collectionProps, properties, reviewState);
+
   if (existing) {
     await notion.pages.update({ page_id: existing.id, properties });
     return existing.id;
@@ -678,14 +856,7 @@ async function upsertOutputItem(databaseId, ideaPageId, type, name, fieldMap) {
 
 async function createOrUpsertCompetitors(ideaPageId, competitors) {
   for (const competitor of competitors) {
-    const fieldMap = [
-      { aliases: ["Pricing"], value: competitor.pricing || "unknown" },
-      { aliases: ["Strengths"], value: (competitor.strengths || []).join(", ") || "unknown" },
-      { aliases: ["Weaknesses"], value: (competitor.weaknesses || []).join(", ") || "unknown" },
-      { aliases: ["Notes"], value: competitor.notes || "estimate" },
-      { aliases: ["Market"], value: competitor.market || "unknown" },
-      { aliases: ["Website"], value: competitor.website || "unknown" },
-    ];
+    const fieldMap = buildFieldMapForType("competitor", competitor);
 
     await upsertOutputItem(
       env.NOTION_COMPETITORS_DB_ID,
@@ -701,23 +872,7 @@ async function createOrUpsertCompetitors(ideaPageId, competitors) {
 
 async function createOrUpsertRoadmap(ideaPageId, roadmapItems) {
   for (const item of roadmapItems) {
-    const fieldMap = [
-      {
-        aliases: ["Priority"],
-        value: item.priority,
-        allowedTypes: ["select", "multi_select", "rich_text"],
-      },
-      {
-        aliases: ["Status"],
-        value: item.status || "Planned",
-        allowedTypes: ["select", "multi_select", "status", "rich_text"],
-      },
-      {
-        aliases: ["Description"],
-        value: `Complexity: ${item.complexity}`,
-        allowedTypes: ["rich_text"],
-      },
-    ];
+    const fieldMap = buildFieldMapForType("roadmap", item);
 
     await upsertOutputItem(env.NOTION_ROADMAP_DB_ID, ideaPageId, "roadmap", item.feature, fieldMap);
   }
@@ -728,21 +883,7 @@ async function createOrUpsertRoadmap(ideaPageId, roadmapItems) {
 async function createOrUpsertMarketing(ideaPageId, marketingItems) {
   for (const item of marketingItems) {
     const name = `${item.channel} - ${item.strategy}`;
-    const fieldMap = [
-      { aliases: ["Channel"], value: item.channel },
-      { aliases: ["Strategy"], value: item.strategy },
-      { aliases: ["Content Idea", "Campaign Idea"], value: item.contentIdea },
-      {
-        aliases: ["Priority"],
-        value: item.priority,
-        allowedTypes: ["select", "multi_select", "rich_text"],
-      },
-      {
-        aliases: ["Seleccionar"],
-        value: item.contentIdea,
-        allowedTypes: ["select", "multi_select"],
-      },
-    ];
+    const fieldMap = buildFieldMapForType("marketing", item);
 
     await upsertOutputItem(env.NOTION_MARKETING_DB_ID, ideaPageId, "marketing", name, fieldMap);
   }
@@ -783,6 +924,190 @@ async function getOutputCounts(ideaPageId) {
   return { competitors, roadmap, marketing };
 }
 
+function parseCurrentItemByType(type, pageProperties, titleValue) {
+  const getByAliases = (aliases) => {
+    const meta = findPropertyMeta(pageProperties, aliases);
+    if (!meta) {
+      return "";
+    }
+    return extractPlainTextByProperty(pageProperties[meta.name]);
+  };
+
+  if (type === "competitor") {
+    return {
+      name: titleValue,
+      pricing: getByAliases(["Pricing"]) || "unknown",
+      strengths: parseListValue(getByAliases(["Strengths"])),
+      weaknesses: parseListValue(getByAliases(["Weaknesses"])),
+      notes: getByAliases(["Notes"]) || "",
+    };
+  }
+
+  if (type === "roadmap") {
+    let complexity = getByAliases(["Complexity"]);
+    if (!complexity) {
+      const description = getByAliases(["Description"]);
+      const match = /complexity\s*:\s*(high|medium|low)/i.exec(description);
+      complexity = match ? `${match[1][0].toUpperCase()}${match[1].slice(1).toLowerCase()}` : "Medium";
+    }
+
+    return {
+      feature: titleValue,
+      priority: coerceEnumValue(getByAliases(["Priority"]), ["High", "Medium", "Low"], "Medium"),
+      complexity: coerceEnumValue(complexity, ["High", "Medium", "Low"], "Medium"),
+      status: getByAliases(["Status"]) || "Planned",
+    };
+  }
+
+  if (type === "marketing") {
+    return {
+      channel: getByAliases(["Channel"]) || "Unknown",
+      strategy: getByAliases(["Strategy"]) || titleValue,
+      contentIdea: getByAliases(["Content Idea", "Campaign Idea"]) || "",
+      priority: coerceEnumValue(getByAliases(["Priority"]), ["High", "Medium", "Low"], "Medium"),
+    };
+  }
+
+  throw new Error(`Unsupported parse type: ${type}`);
+}
+
+function getSourceIdeaId(properties) {
+  const sourceMeta = findPropertyMeta(properties, ["Source Idea", "Source"], [
+    "rich_text",
+    "title",
+    "select",
+    "multi_select",
+  ]);
+  if (!sourceMeta) {
+    return "";
+  }
+
+  return extractPlainTextByProperty(properties[sourceMeta.name]);
+}
+
+async function listReviewItems({ types, ideaPageId, limit = 25 } = {}) {
+  const requested = Array.isArray(types) && types.length ? types : ["competitor", "roadmap", "marketing"];
+  const maxLimit = Math.min(Math.max(Number(limit) || 25, 1), 100);
+  const items = [];
+
+  for (const type of requested) {
+    if (items.length >= maxLimit) {
+      break;
+    }
+
+    const databaseId = getOutputDatabaseIdByType(type);
+    const props = await getCollectionProperties(databaseId);
+    const reviewMeta = findPropertyMeta(props, NEEDS_REVIEW_ALIASES, ["checkbox"]);
+    if (!reviewMeta) {
+      continue;
+    }
+
+    const notesMeta = findPropertyMeta(props, CORRECTION_NOTES_ALIASES, ["rich_text", "title"]);
+    const sourceMeta = findPropertyMeta(props, ["Source Idea", "Source"], [
+      "rich_text",
+      "title",
+      "select",
+      "multi_select",
+    ]);
+
+    const andFilters = [{ property: reviewMeta.name, checkbox: { equals: true } }];
+    if (ideaPageId && sourceMeta) {
+      const sourceFilter = buildFilterByType(sourceMeta.name, sourceMeta.def.type, ideaPageId);
+      if (sourceFilter) {
+        andFilters.push(sourceFilter);
+      }
+    }
+
+    const result = await queryCollection(databaseId, {
+      filter: andFilters.length === 1 ? andFilters[0] : { and: andFilters },
+      sorts: [{ timestamp: "last_edited_time", direction: "descending" }],
+      page_size: maxLimit - items.length,
+    });
+
+    for (const page of result.results) {
+      const pageProps = page.properties || {};
+      const title = getTitleValue(page);
+      const correctionNotes = notesMeta ? extractPlainTextByProperty(pageProps[notesMeta.name]) : "";
+      const reviewFlag = extractCheckboxByProperty(pageProps[reviewMeta.name]);
+      if (!reviewFlag) {
+        continue;
+      }
+
+      const sourceId = getSourceIdeaId(pageProps);
+      if (ideaPageId && sourceId !== ideaPageId) {
+        continue;
+      }
+
+      const currentItem = parseCurrentItemByType(type, pageProps, title);
+      const correctionChecksum = crypto.createHash("sha256").update(correctionNotes || "").digest("hex");
+
+      items.push({
+        id: page.id,
+        type,
+        ideaPageId: sourceId,
+        title,
+        correctionNotes,
+        correctionChecksum,
+        lastEditedTime: page.last_edited_time,
+        currentItem,
+      });
+
+      if (items.length >= maxLimit) {
+        break;
+      }
+    }
+  }
+
+  return items;
+}
+
+async function updateOutputItemByPageId({ type, pageId, ideaPageId, item, reviewState = null }) {
+  const databaseId = getOutputDatabaseIdByType(type);
+  const collectionProps = await getCollectionProperties(databaseId);
+  const titleProperty = await getTitlePropertyName(databaseId);
+
+  const name =
+    type === "competitor"
+      ? item.name
+      : type === "roadmap"
+        ? item.feature
+        : `${item.channel || "Channel"} - ${item.strategy || "Strategy"}`;
+
+  const properties = {
+    [titleProperty]: asTitle(name),
+  };
+
+  const sourceMeta = findPropertyMeta(collectionProps, ["Source Idea", "Source"], [
+    "rich_text",
+    "title",
+    "select",
+    "multi_select",
+  ]);
+
+  if (sourceMeta && ideaPageId) {
+    const sourceValue = toNotionPropertyValue(sourceMeta.def, ideaPageId);
+    if (sourceValue) {
+      properties[sourceMeta.name] = sourceValue;
+    }
+  }
+
+  const fieldMap = buildFieldMapForType(type, item);
+  for (const field of fieldMap) {
+    const meta = findPropertyMeta(collectionProps, field.aliases, field.allowedTypes || null);
+    if (!meta) {
+      continue;
+    }
+    const notionValue = toNotionPropertyValue(meta.def, field.value);
+    if (notionValue) {
+      properties[meta.name] = notionValue;
+    }
+  }
+
+  applyReviewPropertiesToPayload(collectionProps, properties, reviewState);
+
+  await notion.pages.update({ page_id: pageId, properties });
+}
+
 module.exports = {
   queryStartupIdeasToRun,
   getIdeaById,
@@ -794,4 +1119,6 @@ module.exports = {
   createOrUpsertRoadmap,
   createOrUpsertMarketing,
   getOutputCounts,
+  listReviewItems,
+  updateOutputItemByPageId,
 };

@@ -10,6 +10,8 @@ const { createInspectSchemasTool } = require("./tools/inspectSchemas");
 const { createListIdeasToRunTool } = require("./tools/listIdeasToRun");
 const { createClaimIdeaTool } = require("./tools/claimIdea");
 const { createRunIdeaTool } = require("./tools/runIdea");
+const { createListReviewsTool } = require("./tools/listReviews");
+const { createApplyCorrectionsTool } = require("./tools/applyCorrections");
 
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 const startedAt = Date.now();
@@ -22,6 +24,8 @@ const toolHandlers = {
   "founder.list_ideas_to_run": createListIdeasToRunTool({ notionProvider }),
   "founder.claim_idea": createClaimIdeaTool({ notionProvider }),
   "founder.run_idea": createRunIdeaTool({ notionProvider, workflowEngine }),
+  "founder.list_reviews": createListReviewsTool({ notionProvider }),
+  "founder.apply_corrections": createApplyCorrectionsTool({ notionProvider }),
 };
 
 function getToolsList() {
@@ -31,6 +35,8 @@ function getToolsList() {
     { name: "founder.list_ideas_to_run", description: "List ideas in Run/Queued status" },
     { name: "founder.claim_idea", description: "Attempt to claim a specific idea for execution" },
     { name: "founder.run_idea", description: "Execute one complete workflow for one idea" },
+    { name: "founder.list_reviews", description: "List output rows flagged for human review" },
+    { name: "founder.apply_corrections", description: "Apply human corrections to flagged output rows" },
   ];
 }
 

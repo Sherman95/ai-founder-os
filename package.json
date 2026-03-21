@@ -1,6 +1,6 @@
 {
   "name": "ai-founder-os",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "main": "server/index.js",
   "scripts": {
     "dev": "nodemon server/index.js",
@@ -9,6 +9,7 @@
     "workflow:once": "node server/scripts/runWorkflowOnce.js",
     "mcp": "node server/mcp/server.js",
     "demo:mcp": "node examples/mcpClientDemo.js",
+    "demo:challenge": "node examples/challengeDemo.js",
     "smoke": "node server/scripts/smokeCheck.js",
     "test": "npm run smoke"
   },

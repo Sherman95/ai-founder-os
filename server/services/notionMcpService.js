@@ -132,6 +132,33 @@ async function getOutputCounts(ideaPageId) {
   return result;
 }
 
+async function listReviewItems(input = {}) {
+  const result = await runMcpOrFallback({
+    operation: "listReviewItems",
+    toolName: env.NOTION_MCP_TOOL_LIST_REVIEW_ITEMS,
+    input,
+    fallbackFn: () => apiService.listReviewItems(input),
+  });
+
+  if (Array.isArray(result)) {
+    return result;
+  }
+  if (Array.isArray(result?.items)) {
+    return result.items;
+  }
+
+  return [];
+}
+
+async function updateOutputItemByPageId(input = {}) {
+  await runMcpOrFallback({
+    operation: "updateOutputItemByPageId",
+    toolName: env.NOTION_MCP_TOOL_UPDATE_OUTPUT_ITEM,
+    input,
+    fallbackFn: () => apiService.updateOutputItemByPageId(input),
+  });
+}
+
 module.exports = {
   queryStartupIdeasToRun,
   getIdeaById,
@@ -141,6 +168,8 @@ module.exports = {
   createOrUpsertRoadmap,
   createOrUpsertMarketing,
   getOutputCounts,
+  listReviewItems,
+  updateOutputItemByPageId,
   validateConfiguredSchemas,
   inspectSchemas: validateConfiguredSchemas,
 };

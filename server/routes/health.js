@@ -6,7 +6,7 @@ router.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     time: new Date().toISOString(),
-    version: "0.2.0",
+    version: "0.2.1",
   });
 });
 
