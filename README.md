@@ -65,6 +65,10 @@ Copy `.env.example` to `.env` and fill values:
 - `GEMINI_API_KEY`
 - `POLL_INTERVAL_MS` (30000 to 120000 recommended)
 
+Important:
+- Placeholder values in `.env.example` are intentionally invalid for runtime.
+- Replace every placeholder with real credentials/IDs before running `npm run dev` or `npm run start`.
+
 If any required variable is missing, startup fails with a clear validation error.
 
 ## Install and run

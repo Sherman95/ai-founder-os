@@ -3,15 +3,40 @@ const { z } = require("zod");
 
 dotenv.config();
 
+const notionDbIdSchema = z
+  .string()
+  .regex(/^[a-f0-9]{32}$/i, "must be a 32-char Notion database ID (no dashes)");
+
+const nonPlaceholderSecret = (label) =>
+  z
+    .string()
+    .min(1, `${label} is required`)
+    .refine(
+      (value) => !["secret_notion_token", "your_gemini_api_key", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"].includes(value),
+      `${label} must be replaced with a real value`
+    );
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(3000),
-  NOTION_TOKEN: z.string().min(1, "NOTION_TOKEN is required"),
-  NOTION_STARTUP_IDEAS_DB_ID: z.string().min(1, "NOTION_STARTUP_IDEAS_DB_ID is required"),
-  NOTION_COMPETITORS_DB_ID: z.string().min(1, "NOTION_COMPETITORS_DB_ID is required"),
-  NOTION_ROADMAP_DB_ID: z.string().min(1, "NOTION_ROADMAP_DB_ID is required"),
-  NOTION_MARKETING_DB_ID: z.string().min(1, "NOTION_MARKETING_DB_ID is required"),
-  GEMINI_API_KEY: z.string().min(1, "GEMINI_API_KEY is required"),
+  NOTION_TOKEN: nonPlaceholderSecret("NOTION_TOKEN"),
+  NOTION_STARTUP_IDEAS_DB_ID: notionDbIdSchema.refine(
+    (value) => value !== "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "NOTION_STARTUP_IDEAS_DB_ID must be replaced with a real value"
+  ),
+  NOTION_COMPETITORS_DB_ID: notionDbIdSchema.refine(
+    (value) => value !== "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "NOTION_COMPETITORS_DB_ID must be replaced with a real value"
+  ),
+  NOTION_ROADMAP_DB_ID: notionDbIdSchema.refine(
+    (value) => value !== "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "NOTION_ROADMAP_DB_ID must be replaced with a real value"
+  ),
+  NOTION_MARKETING_DB_ID: notionDbIdSchema.refine(
+    (value) => value !== "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "NOTION_MARKETING_DB_ID must be replaced with a real value"
+  ),
+  GEMINI_API_KEY: nonPlaceholderSecret("GEMINI_API_KEY"),
   POLL_INTERVAL_MS: z.coerce.number().int().min(30000).max(120000).default(45000),
 });
 
