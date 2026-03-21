@@ -10,15 +10,22 @@ const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 function createWorkflowEngine({ notionService }) {
   return {
     async runWorkflow(ideaPage) {
-      if (ideaPage.status === "Running") {
-        logger.info({ ts: new Date().toISOString(), ideaId: ideaPage.id }, "Skipping idea already running");
-        return;
-      }
-
       const runStartedAt = new Date().toISOString();
+      let claimed = false;
+
       try {
+        claimed = await notionService.claimIdeaForRun(ideaPage.id);
+        if (!claimed) {
+          logger.info(
+            { ts: new Date().toISOString(), ideaId: ideaPage.id },
+            "Skipping workflow: idea not claimable"
+          );
+          return;
+        }
+
         await notionService.updateIdeaStatus(ideaPage.id, "Running", {
           runLog: `Workflow started at ${runStartedAt}`,
+          lastRunAt: runStartedAt,
         });
 
         const analysis = await ideaAnalyzer(ideaPage);
@@ -52,9 +59,12 @@ function createWorkflowEngine({ notionService }) {
         const logMessage = `Workflow failed at ${failedAt}. Error: ${error?.message || "unknown"}`;
 
         try {
-          await notionService.updateIdeaStatus(ideaPage.id, "Failed", {
-            runLog: logMessage,
-          });
+          if (claimed) {
+            await notionService.updateIdeaStatus(ideaPage.id, "Failed", {
+              runLog: logMessage,
+              lastRunAt: failedAt,
+            });
+          }
         } catch (statusError) {
           logger.error(
             { ts: new Date().toISOString(), ideaId: ideaPage.id, err: statusError?.message },

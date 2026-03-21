@@ -1,13 +1,14 @@
 {
   "name": "ai-founder-os",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "main": "server/index.js",
   "scripts": {
     "dev": "nodemon server/index.js",
     "start": "node server/index.js",
     "inspect:schemas": "node server/scripts/inspectNotionSchemas.js",
     "workflow:once": "node server/scripts/runWorkflowOnce.js",
-    "test": "echo \"No tests configured yet\""
+    "smoke": "node server/scripts/smokeCheck.js",
+    "test": "npm run smoke"
   },
   "keywords": [],
   "author": "",

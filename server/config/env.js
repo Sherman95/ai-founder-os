@@ -38,6 +38,13 @@ const envSchema = z.object({
   ),
   GEMINI_API_KEY: nonPlaceholderSecret("GEMINI_API_KEY"),
   POLL_INTERVAL_MS: z.coerce.number().int().min(30000).max(120000).default(45000),
+  DISABLE_POLLER: z
+    .enum(["true", "false", "1", "0", "TRUE", "FALSE"])
+    .optional()
+    .transform((value) => ["true", "1", "TRUE"].includes(value || "")),
+  MAX_COMPETITORS: z.coerce.number().int().min(1).max(20).default(5),
+  MAX_ROADMAP_ITEMS: z.coerce.number().int().min(1).max(30).default(7),
+  MAX_MARKETING_ITEMS: z.coerce.number().int().min(1).max(30).default(7),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);

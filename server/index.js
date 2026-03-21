@@ -22,12 +22,32 @@ const poller = createPoller({
   runFn: workflowEngine.runWorkflow,
 });
 
-app.listen(env.PORT, () => {
-  logger.info(
-    { ts: new Date().toISOString(), port: env.PORT, pollMs: env.POLL_INTERVAL_MS },
-    "AI Founder OS server running"
-  );
-  poller.start();
+async function bootstrap() {
+  await notionService.validateConfiguredSchemas();
+
+  app.listen(env.PORT, () => {
+    logger.info(
+      {
+        ts: new Date().toISOString(),
+        port: env.PORT,
+        pollMs: env.POLL_INTERVAL_MS,
+        disablePoller: Boolean(env.DISABLE_POLLER),
+      },
+      "AI Founder OS server running"
+    );
+
+    if (env.DISABLE_POLLER) {
+      logger.warn({ ts: new Date().toISOString() }, "Poller is disabled via DISABLE_POLLER=true");
+      return;
+    }
+
+    poller.start();
+  });
+}
+
+bootstrap().catch((error) => {
+  logger.error({ ts: new Date().toISOString(), err: error?.message }, "Startup schema validation failed");
+  process.exit(1);
 });
 
 process.on("SIGINT", () => {

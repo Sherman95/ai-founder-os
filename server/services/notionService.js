@@ -154,6 +154,24 @@ function getStatusValue(page) {
   return null;
 }
 
+function getStatusValueFromProperty(property) {
+  if (!property) {
+    return null;
+  }
+
+  if (property.type === "status") {
+    return property.status?.name || null;
+  }
+  if (property.type === "select") {
+    return property.select?.name || null;
+  }
+  if (property.type === "multi_select") {
+    return property.multi_select?.[0]?.name || null;
+  }
+
+  return null;
+}
+
 function getTitleValue(page) {
   const properties = page.properties || {};
   for (const key of Object.keys(properties)) {
@@ -441,6 +459,18 @@ async function updateIdeaStatus(pageId, status, extraProps = {}) {
       }
     }
 
+    if (extraProps.lastRunAt) {
+      const lastRunName = findFirstExistingPropertyName(startupProps, ["Last Run"]);
+      if (lastRunName) {
+        const lastRunType = startupProps[lastRunName]?.type;
+        if (lastRunType === "date") {
+          properties[lastRunName] = { date: { start: extraProps.lastRunAt } };
+        } else if (lastRunType === "rich_text") {
+          properties[lastRunName] = asRichText(extraProps.lastRunAt);
+        }
+      }
+    }
+
     await notion.pages.update({
       page_id: pageId,
       properties,
@@ -450,6 +480,127 @@ async function updateIdeaStatus(pageId, status, extraProps = {}) {
   } catch (error) {
     logger.error({ ts: new Date().toISOString(), pageId, status, err: error?.message }, "Failed updating idea status");
     throw error;
+  }
+}
+
+async function claimIdeaForRun(pageId) {
+  const statusMeta = await getStatusPropertyMeta(env.NOTION_STARTUP_IDEAS_DB_ID);
+  const page = await notion.pages.retrieve({ page_id: pageId });
+
+  const statusProperty = page.properties?.[statusMeta.name];
+  const currentStatus = getStatusValueFromProperty(statusProperty);
+
+  if (!["Run", "Queued"].includes(currentStatus || "")) {
+    logger.info(
+      { ts: new Date().toISOString(), pageId, currentStatus },
+      "Idea not claimable, skipping workflow"
+    );
+    return false;
+  }
+
+  await updateIdeaStatus(pageId, "Running", {
+    runLog: `Workflow claimed at ${new Date().toISOString()}`,
+    lastRunAt: new Date().toISOString(),
+  });
+
+  return true;
+}
+
+function requirePropertyByType({ properties, databaseLabel, propertyName, allowedTypes }) {
+  const meta = findPropertyMeta(properties, [propertyName], allowedTypes);
+  if (!meta) {
+    throw new Error(
+      `${databaseLabel} is missing required property '${propertyName}' with type(s): ${allowedTypes.join(", ")}`
+    );
+  }
+  return meta;
+}
+
+async function validateConfiguredSchemas() {
+  const issues = [];
+
+  const check = async (label, databaseId, validator) => {
+    try {
+      const props = await getCollectionProperties(databaseId);
+      await validator(props);
+      logger.info({ ts: new Date().toISOString(), label }, "Schema validation passed");
+    } catch (error) {
+      issues.push(`${label}: ${error?.message || error}`);
+    }
+  };
+
+  await check("Startup Ideas", env.NOTION_STARTUP_IDEAS_DB_ID, async (properties) => {
+    const titleMeta = Object.entries(properties).find(([, def]) => def.type === "title");
+    if (!titleMeta) {
+      throw new Error("missing required title property");
+    }
+
+    const statusMeta = await getStatusPropertyMeta(env.NOTION_STARTUP_IDEAS_DB_ID);
+    if (!statusMeta) {
+      throw new Error("missing workflow status property (status/select/multi_select)");
+    }
+
+    const optionalSummary = findPropertyMeta(properties, ["Executive Summary", "Summary"], ["rich_text"]);
+    const optionalScore = findPropertyMeta(properties, ["Startup Viability Score", "Score"], [
+      "number",
+      "rich_text",
+    ]);
+    const optionalLog = findPropertyMeta(properties, ["Run Log", "Logs"], ["rich_text"]);
+
+    logger.info(
+      {
+        ts: new Date().toISOString(),
+        titleProperty: titleMeta[0],
+        statusProperty: statusMeta.name,
+        supportsSummary: Boolean(optionalSummary),
+        supportsScore: Boolean(optionalScore),
+        supportsRunLog: Boolean(optionalLog),
+      },
+      "Startup Ideas schema capability"
+    );
+  });
+
+  await check("Competitors", env.NOTION_COMPETITORS_DB_ID, async (properties) => {
+    const hasTitle = Object.entries(properties).some(([, def]) => def.type === "title");
+    if (!hasTitle) {
+      throw new Error("missing required title property");
+    }
+    requirePropertyByType({
+      properties,
+      databaseLabel: "Competitors",
+      propertyName: "Source Idea",
+      allowedTypes: ["rich_text"],
+    });
+  });
+
+  await check("Roadmap", env.NOTION_ROADMAP_DB_ID, async (properties) => {
+    const hasTitle = Object.entries(properties).some(([, def]) => def.type === "title");
+    if (!hasTitle) {
+      throw new Error("missing required title property");
+    }
+    requirePropertyByType({
+      properties,
+      databaseLabel: "Roadmap",
+      propertyName: "Source Idea",
+      allowedTypes: ["rich_text"],
+    });
+  });
+
+  await check("Marketing", env.NOTION_MARKETING_DB_ID, async (properties) => {
+    const hasTitle = Object.entries(properties).some(([, def]) => def.type === "title");
+    if (!hasTitle) {
+      throw new Error("missing required title property");
+    }
+    requirePropertyByType({
+      properties,
+      databaseLabel: "Marketing",
+      propertyName: "Source Idea",
+      allowedTypes: ["rich_text"],
+    });
+  });
+
+  if (issues.length) {
+    throw new Error(`Schema validation failed: ${issues.join(" | ")}`);
   }
 }
 
@@ -591,6 +742,8 @@ async function createOrUpsertMarketing(ideaPageId, marketingItems) {
 module.exports = {
   queryStartupIdeasToRun,
   updateIdeaStatus,
+  claimIdeaForRun,
+  validateConfiguredSchemas,
   createOrUpsertCompetitors,
   createOrUpsertRoadmap,
   createOrUpsertMarketing,
