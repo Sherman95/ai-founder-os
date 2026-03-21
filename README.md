@@ -1,4 +1,4 @@
-# AI Founder OS - Production-Ready Basic Backend
+# AI Founder OS - Production-Ready Basic Backend (v0.2.0 MCP Challenge)
 
 AI Founder OS is a production-ready basic backend that uses Notion as UI + database + memory.
 The system polls a Notion database for startup ideas with Status `Run` or `Queued`, executes a multi-agent workflow, and writes outputs into Notion databases:
@@ -8,6 +8,11 @@ The system polls a Notion database for startup ideas with Status `Run` or `Queue
 - Marketing Strategy
 
 It also writes a startup viability score and executive summary back to the idea.
+
+This release adds MCP support in two directions:
+
+- Provider mode switch for Notion access: `NOTION_MODE=api|mcp`
+- Founder OS MCP server exposing high-level tools (`founder.*`)
 
 ## Stack
 
@@ -32,6 +37,9 @@ server/
     poller.js
   services/
     notionService.js
+    notionProvider.js
+    notionMcpClient.js
+    notionMcpService.js
     geminiService.js
   agents/
     ideaAnalyzer.js
@@ -46,6 +54,14 @@ server/
   scripts/
     inspectNotionSchemas.js
     runWorkflowOnce.js
+  mcp/
+    server.js
+    tools/
+      health.js
+      inspectSchemas.js
+      listIdeasToRun.js
+      claimIdea.js
+      runIdea.js
 prompts/
   ideaAnalyzer.md
   marketResearch.md
@@ -53,6 +69,10 @@ prompts/
   marketingAgent.md
 README.md
 .env.example
+docs/
+  VS_CODE_MCP_SETUP.md
+  MCP_SDK_NOTES.md
+SUBMISSION_DEVTO.md
 ```
 
 ## Environment variables
@@ -60,12 +80,28 @@ README.md
 Copy `.env.example` to `.env` and fill values:
 
 - `PORT`
-- `NOTION_TOKEN`
+- `NOTION_MODE` (`api` or `mcp`)
+- `NOTION_TOKEN` (required in `api` mode)
 - `NOTION_STARTUP_IDEAS_DB_ID`
 - `NOTION_COMPETITORS_DB_ID`
 - `NOTION_ROADMAP_DB_ID`
 - `NOTION_MARKETING_DB_ID`
 - `GEMINI_API_KEY`
+- `NOTION_MCP_ENDPOINT` (required in `mcp` mode)
+- `NOTION_OAUTH_CLIENT_ID` (required in `mcp` mode)
+- `NOTION_OAUTH_CLIENT_SECRET` (required in `mcp` mode)
+- `NOTION_OAUTH_REDIRECT_URI` (required in `mcp` mode)
+- `NOTION_OAUTH_TOKEN` (required in `mcp` mode)
+- `NOTION_MCP_TOOL_QUERY_STARTUP_IDEAS` (optional override)
+- `NOTION_MCP_TOOL_GET_IDEA` (optional override)
+- `NOTION_MCP_TOOL_UPDATE_IDEA_STATUS` (optional override)
+- `NOTION_MCP_TOOL_CLAIM_IDEA` (optional override)
+- `NOTION_MCP_TOOL_UPSERT_COMPETITORS` (optional override)
+- `NOTION_MCP_TOOL_UPSERT_ROADMAP` (optional override)
+- `NOTION_MCP_TOOL_UPSERT_MARKETING` (optional override)
+- `NOTION_MCP_TOOL_VALIDATE_SCHEMAS` (optional override)
+- `NOTION_MCP_TOOL_OUTPUT_COUNTS` (optional override)
+- `MCP_PORT` (default `7337`)
 - `POLL_INTERVAL_MS` (30000 to 120000 recommended)
 - `DISABLE_POLLER` (`true` or `false`)
 - `MAX_COMPETITORS` (default `5`)
@@ -96,6 +132,8 @@ Operational scripts:
 ```bash
 npm run inspect:schemas
 npm run workflow:once -- <ideaPageId>
+npm run mcp
+npm run demo:mcp -- <ideaPageId>
 npm run smoke
 ```
 
@@ -109,9 +147,38 @@ Example response:
 {
   "status": "ok",
   "time": "2026-03-21T10:00:00.000Z",
-  "version": "0.1.0"
+  "version": "0.2.0"
 }
 ```
+
+## MCP usage
+
+### 1. Run with Notion API mode (default)
+
+- Set `NOTION_MODE=api`
+- Provide `NOTION_TOKEN` and database IDs
+
+### 2. Run with Notion MCP hosted mode
+
+- Set `NOTION_MODE=mcp`
+- Provide `NOTION_MCP_ENDPOINT`
+- Keep database IDs configured (used by tool calls)
+
+### 3. Run Founder MCP server
+
+```bash
+npm run mcp
+```
+
+Exposed tools:
+
+- `founder.health`
+- `founder.inspect_schemas`
+- `founder.list_ideas_to_run`
+- `founder.claim_idea`
+- `founder.run_idea`
+
+VS Code MCP setup details are documented in `docs/VS_CODE_MCP_SETUP.md`.
 
 ## Notion MVP flow
 
@@ -172,7 +239,7 @@ Recommended fields:
 - Workflow skips ideas already marked `Running`.
 - Upserts avoid duplicates using `Key`; if `Key` is missing, fallback matching uses `Source Idea + title`.
 - Gemini JSON output is validated by Zod with retry logic (2 retries max).
-- If Gemini is rate-limited or unavailable, `ideaAnalyzer` uses a deterministic fallback so workflow can still complete.
+- If Gemini is rate-limited or unavailable, all generation agents use deterministic fallback paths so workflow can still complete.
 - Poller workflow claims each idea before processing to prevent duplicate processing across instances.
 - Startup runs schema validation against configured Notion DBs and exits fast when requirements are missing.
 
