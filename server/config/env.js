@@ -56,6 +56,12 @@ const envSchema = z.object({
   ),
   GEMINI_API_KEY: nonPlaceholderSecret("GEMINI_API_KEY"),
   GEMINI_MODEL: z.string().default("gemini-2.5-flash"),
+  TAVILY_API_KEY: z.string().optional(),
+  WEB_SEARCH_ENABLED: z
+    .enum(["true", "false", "1", "0", "TRUE", "FALSE"])
+    .optional()
+    .transform((value) => ["true", "1", "TRUE"].includes(value || "")),
+  WEB_SEARCH_MAX_RESULTS: z.coerce.number().int().min(1).max(10).default(5),
   POLL_INTERVAL_MS: z.coerce.number().int().min(30000).max(120000).default(45000),
   DISABLE_POLLER: z
     .enum(["true", "false", "1", "0", "TRUE", "FALSE"])
@@ -66,6 +72,14 @@ const envSchema = z.object({
   MAX_MARKETING_ITEMS: z.coerce.number().int().min(1).max(30).default(7),
 })
   .superRefine((data, ctx) => {
+      if (data.WEB_SEARCH_ENABLED && !data.TAVILY_API_KEY) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["TAVILY_API_KEY"],
+          message: "TAVILY_API_KEY is required when WEB_SEARCH_ENABLED=true",
+        });
+      }
+
     if (data.NOTION_MODE === "api") {
       const parsed = nonPlaceholderSecret("NOTION_TOKEN").safeParse(data.NOTION_TOKEN);
       if (!parsed.success) {

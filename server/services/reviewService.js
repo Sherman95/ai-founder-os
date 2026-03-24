@@ -40,9 +40,12 @@ function fallbackCorrection(type, currentItem, notes) {
   if (type === "competitor") {
     return competitorSchema.parse({
       name: currentItem.name || "Corrected competitor",
+      website: currentItem.website || "unknown",
+      source: currentItem.source === "web_search" ? "web_search" : "ai_generated",
       pricing: currentItem.pricing || "unknown",
       strengths: currentItem.strengths?.length ? currentItem.strengths : ["updated per review"],
       weaknesses: currentItem.weaknesses?.length ? currentItem.weaknesses : ["updated per review"],
+      search_snippet: currentItem.search_snippet || `Correction note: ${String(notes || "").slice(0, 300)}`,
       notes: `${currentItem.notes || ""} [review] ${String(notes || "").slice(0, 300)}`.trim(),
     });
   }
@@ -68,9 +71,12 @@ function normalizeCurrentItem(type, item) {
   if (type === "competitor") {
     return {
       name: item?.name || "",
+      website: item?.website || "unknown",
+      source: item?.source === "web_search" ? "web_search" : "ai_generated",
       pricing: item?.pricing || "",
       strengths: Array.isArray(item?.strengths) ? item.strengths : parseList(item?.strengths),
       weaknesses: Array.isArray(item?.weaknesses) ? item.weaknesses : parseList(item?.weaknesses),
+      search_snippet: item?.search_snippet || "",
       notes: item?.notes || "",
     };
   }

@@ -32,7 +32,11 @@ function createWorkflowEngine({ notionService }) {
         const languageHint = detectInputLanguage(`${ideaPage.title || ""} ${ideaPage.description || ""}`);
 
         const analysis = await ideaAnalyzer(ideaPage, { languageHint });
-        const competitors = await marketResearch(analysis, { languageHint });
+        const competitors = await marketResearch(analysis, {
+          languageHint,
+          ideaTitle: ideaPage.title,
+          ideaDescription: ideaPage.description,
+        });
         const roadmap = await productPlanner(analysis, { languageHint });
         const marketing = await marketingAgent(analysis, { languageHint });
 

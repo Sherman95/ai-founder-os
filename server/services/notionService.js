@@ -301,12 +301,18 @@ function getOutputDatabaseIdByType(type) {
 function buildFieldMapForType(type, item) {
   if (type === "competitor") {
     return [
+      {
+        aliases: ["Source", "Data Source", "Origin"],
+        value: item.source || "ai_generated",
+        allowedTypes: ["select", "multi_select", "rich_text"],
+      },
       { aliases: ["Pricing"], value: item.pricing || "unknown" },
       { aliases: ["Strengths"], value: (item.strengths || []).join(", ") || "unknown" },
       { aliases: ["Weaknesses"], value: (item.weaknesses || []).join(", ") || "unknown" },
       { aliases: ["Notes"], value: item.notes || "" },
+      { aliases: ["Evidence", "Search Snippet", "Snippet"], value: item.search_snippet || "" },
       { aliases: ["Market"], value: item.market || "" },
-      { aliases: ["Website"], value: item.website || "" },
+      { aliases: ["Website", "URL"], value: item.website || "" },
     ];
   }
 
@@ -797,19 +803,26 @@ async function upsertOutputItem(databaseId, ideaPageId, type, name, fieldMap, re
   const titleProperty = await getTitlePropertyName(databaseId);
   const titleMeta = { name: titleProperty, def: collectionProps[titleProperty] };
   const keyMeta = findPropertyMeta(collectionProps, ["Key"], ["rich_text", "title"]);
-  const sourceMeta = findPropertyMeta(collectionProps, ["Source Idea", "Source"], [
+  const sourceMeta = findPropertyMeta(collectionProps, ["Source Idea", "Idea Source", "Startup Idea"], [
     "rich_text",
     "title",
     "select",
     "multi_select",
   ]);
+  const strictSourceMeta =
+    findPropertyMeta(collectionProps, ["Source Idea", "Idea Source", "Startup Idea"], [
+    "rich_text",
+    "title",
+    "select",
+    "multi_select",
+    ]) || sourceMeta;
 
   let existing = null;
   if (keyMeta) {
     existing = await findByKey(databaseId, key);
   }
   if (!existing) {
-    existing = await findBySourceAndTitle(databaseId, sourceMeta, ideaPageId, titleMeta, name);
+    existing = await findBySourceAndTitle(databaseId, strictSourceMeta, ideaPageId, titleMeta, name);
   }
 
   const properties = {
@@ -823,10 +836,10 @@ async function upsertOutputItem(databaseId, ideaPageId, type, name, fieldMap, re
     }
   }
 
-  if (sourceMeta) {
-    const sourceValue = toNotionPropertyValue(sourceMeta.def, ideaPageId);
+  if (strictSourceMeta) {
+    const sourceValue = toNotionPropertyValue(strictSourceMeta.def, ideaPageId);
     if (sourceValue) {
-      properties[sourceMeta.name] = sourceValue;
+      properties[strictSourceMeta.name] = sourceValue;
     }
   }
 
@@ -893,18 +906,25 @@ async function createOrUpsertMarketing(ideaPageId, marketingItems) {
 
 async function countOutputItemsForIdea(databaseId, ideaPageId) {
   const props = await getCollectionProperties(databaseId);
-  const sourceMeta = findPropertyMeta(props, ["Source Idea", "Source"], [
+  const sourceMeta = findPropertyMeta(props, ["Source Idea", "Idea Source", "Startup Idea"], [
     "rich_text",
     "title",
     "select",
     "multi_select",
   ]);
+  const strictSourceMeta =
+    findPropertyMeta(props, ["Source Idea", "Idea Source", "Startup Idea"], [
+    "rich_text",
+    "title",
+    "select",
+    "multi_select",
+    ]) || sourceMeta;
 
-  if (!sourceMeta) {
+  if (!strictSourceMeta) {
     return 0;
   }
 
-  const sourceFilter = buildFilterByType(sourceMeta.name, sourceMeta.def.type, ideaPageId);
+  const sourceFilter = buildFilterByType(strictSourceMeta.name, strictSourceMeta.def.type, ideaPageId);
   if (!sourceFilter) {
     return 0;
   }
@@ -936,9 +956,12 @@ function parseCurrentItemByType(type, pageProperties, titleValue) {
   if (type === "competitor") {
     return {
       name: titleValue,
+      website: getByAliases(["Website", "URL"]) || "unknown",
+      source: getByAliases(["Source", "Data Source", "Origin"]) || "ai_generated",
       pricing: getByAliases(["Pricing"]) || "unknown",
       strengths: parseListValue(getByAliases(["Strengths"])),
       weaknesses: parseListValue(getByAliases(["Weaknesses"])),
+      search_snippet: getByAliases(["Evidence", "Search Snippet", "Snippet"]) || "",
       notes: getByAliases(["Notes"]) || "",
     };
   }
@@ -972,12 +995,14 @@ function parseCurrentItemByType(type, pageProperties, titleValue) {
 }
 
 function getSourceIdeaId(properties) {
-  const sourceMeta = findPropertyMeta(properties, ["Source Idea", "Source"], [
+  const sourceMeta =
+    findPropertyMeta(properties, ["Source Idea", "Idea Source", "Startup Idea"], [
     "rich_text",
     "title",
     "select",
     "multi_select",
-  ]);
+    ]) ||
+    findPropertyMeta(properties, ["Source"], ["rich_text", "title"]);
   if (!sourceMeta) {
     return "";
   }
@@ -1003,7 +1028,7 @@ async function listReviewItems({ types, ideaPageId, limit = 25 } = {}) {
     }
 
     const notesMeta = findPropertyMeta(props, CORRECTION_NOTES_ALIASES, ["rich_text", "title"]);
-    const sourceMeta = findPropertyMeta(props, ["Source Idea", "Source"], [
+    const sourceMeta = findPropertyMeta(props, ["Source Idea", "Idea Source", "Startup Idea"], [
       "rich_text",
       "title",
       "select",
@@ -1077,7 +1102,7 @@ async function updateOutputItemByPageId({ type, pageId, ideaPageId, item, review
     [titleProperty]: asTitle(name),
   };
 
-  const sourceMeta = findPropertyMeta(collectionProps, ["Source Idea", "Source"], [
+  const sourceMeta = findPropertyMeta(collectionProps, ["Source Idea", "Idea Source", "Startup Idea"], [
     "rich_text",
     "title",
     "select",

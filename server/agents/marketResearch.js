@@ -5,6 +5,7 @@ const env = require("../config/env");
 const { generateJson, isQuotaError } = require("../services/geminiService");
 const { competitorListSchema } = require("../schemas/competitor.schema");
 const { buildLanguageRule, detectInputLanguage } = require("../services/languageService");
+const { searchMarketWeb } = require("../services/webSearchService");
 
 const promptPath = path.resolve(__dirname, "../../prompts/marketResearch.md");
 
@@ -13,16 +14,22 @@ function buildFallbackCompetitors(analysis) {
   const base = [
     {
       name: `${analysis.industry} Incumbent Suite`,
+      website: "unknown",
+      source: "ai_generated",
       pricing: "estimate: $49-$299/mo",
       strengths: ["brand recognition", "distribution"],
       weaknesses: ["slower iteration", "legacy UX"],
+      search_snippet: "No web results available. Generated from model prior knowledge.",
       notes: "estimate",
     },
     {
       name: `${analysis.industry} Niche Challenger`,
+      website: "unknown",
+      source: "ai_generated",
       pricing: "unknown",
       strengths: ["focused onboarding", "fast shipping"],
       weaknesses: ["small brand", "limited integrations"],
+      search_snippet: "No web results available. Generated from model prior knowledge.",
       notes: "unknown",
     },
   ];
@@ -35,11 +42,19 @@ async function marketResearch(analysis, options = {}) {
   const languageHint = options.languageHint || detectInputLanguage(JSON.stringify(analysis));
   const languageRule = buildLanguageRule({ languageHint });
 
-  const prompt = `${systemPrompt}\n\n${languageRule}\n\nCONSTRAINT: Return at most ${env.MAX_COMPETITORS} competitors.\n\nINPUT:\n${JSON.stringify(
+  const webResults = await searchMarketWeb({
+    title: options.ideaTitle,
+    description: options.ideaDescription,
+    analysis,
+  });
+
+  const hasWebResults = webResults.length > 0;
+
+  const prompt = `${systemPrompt}\n\n${languageRule}\n\nCONSTRAINT: Return at most ${env.MAX_COMPETITORS} competitors.\n\nWEB_SEARCH_AVAILABLE: ${hasWebResults}\n\nINPUT:\n${JSON.stringify(
     analysis,
     null,
     2
-  )}`;
+  )}\n\nWEB_SEARCH_RESULTS:\n${JSON.stringify(webResults, null, 2)}`;
 
   try {
     const generated = await generateJson({ prompt, schema: competitorListSchema });

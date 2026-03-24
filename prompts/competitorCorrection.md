@@ -12,8 +12,11 @@ Output rules:
 - JSON must match this shape exactly:
   {
     "name": "string",
+    "website": "string",
+    "source": "web_search|ai_generated",
     "pricing": "string",
     "strengths": ["string"],
     "weaknesses": ["string"],
+    "search_snippet": "string",
     "notes": "string"
   }

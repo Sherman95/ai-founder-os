@@ -1,4 +1,4 @@
-# AI Founder OS - Production-Ready Basic Backend (v0.2.3 Prompt Enum Guard)
+# AI Founder OS - Production-Ready Basic Backend (v0.3.0 Real Competitive Intelligence)
 
 AI Founder OS is a production-ready basic backend that uses Notion as UI + database + memory.
 The system polls a Notion database for startup ideas with Status `Run` or `Queued`, executes a multi-agent workflow, and writes outputs into Notion databases:
@@ -6,6 +6,8 @@ The system polls a Notion database for startup ideas with Status `Run` or `Queue
 - Competitor Research
 - Product Roadmap
 - Marketing Strategy
+
+Competitor research is grounded on real web search evidence (when enabled) and then structured by Gemini.
 
 It also writes a startup viability score and executive summary back to the idea.
 
@@ -94,6 +96,9 @@ Copy `.env.example` to `.env` and fill values:
 - `NOTION_MARKETING_DB_ID`
 - `GEMINI_API_KEY`
 - `GEMINI_MODEL` (default `gemini-2.5-flash`)
+- `TAVILY_API_KEY` (required when `WEB_SEARCH_ENABLED=true`)
+- `WEB_SEARCH_ENABLED` (`true` or `false`, default `false`)
+- `WEB_SEARCH_MAX_RESULTS` (default `5`, max `10`)
 - `NOTION_MCP_ENDPOINT` (required in `mcp` mode)
 - `NOTION_OAUTH_CLIENT_ID` (required in `mcp` mode)
 - `NOTION_OAUTH_CLIENT_SECRET` (required in `mcp` mode)
@@ -158,7 +163,7 @@ Example response:
 {
   "status": "ok",
   "time": "2026-03-21T10:00:00.000Z",
-  "version": "0.2.3"
+  "version": "0.3.0"
 }
 ```
 
@@ -244,6 +249,7 @@ Optional but recommended:
 Recommended fields:
 
 - Competitors: `Pricing`, `Strengths`, `Weaknesses`, `Notes`
+- Competitors grounded fields: `Website`, `Source`, `Evidence`
 - Roadmap: `Priority`, `Complexity`, `Status`
 - Marketing: `Channel`, `Strategy`, `Content Idea`, `Priority`
 
