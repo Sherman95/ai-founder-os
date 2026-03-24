@@ -4,6 +4,7 @@ const path = require("path");
 const env = require("../config/env");
 const { generateJson, isQuotaError } = require("../services/geminiService");
 const { competitorListSchema } = require("../schemas/competitor.schema");
+const { buildLanguageRule, detectInputLanguage } = require("../services/languageService");
 
 const promptPath = path.resolve(__dirname, "../../prompts/marketResearch.md");
 
@@ -29,9 +30,12 @@ function buildFallbackCompetitors(analysis) {
   return competitorListSchema.parse(base.slice(0, count));
 }
 
-async function marketResearch(analysis) {
+async function marketResearch(analysis, options = {}) {
   const systemPrompt = fs.readFileSync(promptPath, "utf8");
-  const prompt = `${systemPrompt}\n\nCONSTRAINT: Return at most ${env.MAX_COMPETITORS} competitors.\n\nINPUT:\n${JSON.stringify(
+  const languageHint = options.languageHint || detectInputLanguage(JSON.stringify(analysis));
+  const languageRule = buildLanguageRule({ languageHint });
+
+  const prompt = `${systemPrompt}\n\n${languageRule}\n\nCONSTRAINT: Return at most ${env.MAX_COMPETITORS} competitors.\n\nINPUT:\n${JSON.stringify(
     analysis,
     null,
     2

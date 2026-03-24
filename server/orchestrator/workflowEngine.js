@@ -4,6 +4,7 @@ const { ideaAnalyzer } = require("../agents/ideaAnalyzer");
 const { marketResearch } = require("../agents/marketResearch");
 const { productPlanner } = require("../agents/productPlanner");
 const { marketingAgent } = require("../agents/marketingAgent");
+const { detectInputLanguage } = require("../services/languageService");
 
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 
@@ -28,10 +29,12 @@ function createWorkflowEngine({ notionService }) {
           lastRunAt: runStartedAt,
         });
 
-        const analysis = await ideaAnalyzer(ideaPage);
-        const competitors = await marketResearch(analysis);
-        const roadmap = await productPlanner(analysis);
-        const marketing = await marketingAgent(analysis);
+        const languageHint = detectInputLanguage(`${ideaPage.title || ""} ${ideaPage.description || ""}`);
+
+        const analysis = await ideaAnalyzer(ideaPage, { languageHint });
+        const competitors = await marketResearch(analysis, { languageHint });
+        const roadmap = await productPlanner(analysis, { languageHint });
+        const marketing = await marketingAgent(analysis, { languageHint });
 
         await notionService.createOrUpsertCompetitors(ideaPage.id, competitors);
         await notionService.createOrUpsertRoadmap(ideaPage.id, roadmap);

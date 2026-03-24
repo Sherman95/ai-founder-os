@@ -55,6 +55,7 @@ const envSchema = z.object({
     "NOTION_MARKETING_DB_ID must be replaced with a real value"
   ),
   GEMINI_API_KEY: nonPlaceholderSecret("GEMINI_API_KEY"),
+  GEMINI_MODEL: z.string().default("gemini-2.5-flash"),
   POLL_INTERVAL_MS: z.coerce.number().int().min(30000).max(120000).default(45000),
   DISABLE_POLLER: z
     .enum(["true", "false", "1", "0", "TRUE", "FALSE"])

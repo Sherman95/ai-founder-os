@@ -93,6 +93,7 @@ Copy `.env.example` to `.env` and fill values:
 - `NOTION_ROADMAP_DB_ID`
 - `NOTION_MARKETING_DB_ID`
 - `GEMINI_API_KEY`
+- `GEMINI_MODEL` (default `gemini-2.5-flash`)
 - `NOTION_MCP_ENDPOINT` (required in `mcp` mode)
 - `NOTION_OAUTH_CLIENT_ID` (required in `mcp` mode)
 - `NOTION_OAUTH_CLIENT_SECRET` (required in `mcp` mode)
@@ -257,6 +258,7 @@ Recommended fields:
 - Poller workflow claims each idea before processing to prevent duplicate processing across instances.
 - Startup runs schema validation against configured Notion DBs and exits fast when requirements are missing.
 - Corrections loop is idempotent by row + notes checksum and protected by in-process lock.
+- Language auto-adaptation: agents return human-readable JSON strings in the same language detected from the input idea text.
 
 ## Human-in-the-loop corrections
 

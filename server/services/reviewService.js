@@ -7,6 +7,7 @@ const { generateJson, isQuotaError } = require("./geminiService");
 const { competitorSchema } = require("../schemas/competitor.schema");
 const { roadmapItemSchema } = require("../schemas/roadmap.schema");
 const { marketingItemSchema } = require("../schemas/marketing.schema");
+const { buildLanguageRule, detectInputLanguage } = require("./languageService");
 
 const promptByType = {
   competitor: fs.readFileSync(path.resolve(__dirname, "../../prompts/competitorCorrection.md"), "utf8"),
@@ -91,9 +92,11 @@ function normalizeCurrentItem(type, item) {
   };
 }
 
-function buildCorrectionPrompt({ type, analysis, currentItem, correctionNotes }) {
+function buildCorrectionPrompt({ type, analysis, currentItem, correctionNotes, languageHint }) {
   return [
     promptByType[type],
+    "",
+    buildLanguageRule({ languageHint }),
     "",
     "IDEA_ANALYSIS_JSON:",
     JSON.stringify(analysis, null, 2),
@@ -166,17 +169,19 @@ async function applyCorrections({ notionProvider, types, ideaPageId, limit = 10 
 
       if (!analysisByIdea.has(reviewItem.ideaPageId)) {
         const idea = await notionProvider.getIdeaById(reviewItem.ideaPageId);
-        const analysis = await ideaAnalyzer(idea);
-        analysisByIdea.set(reviewItem.ideaPageId, analysis);
+        const languageHint = detectInputLanguage(`${idea.title || ""} ${idea.description || ""}`);
+        const analysis = await ideaAnalyzer(idea, { languageHint });
+        analysisByIdea.set(reviewItem.ideaPageId, { analysis, languageHint });
       }
 
-      const analysis = analysisByIdea.get(reviewItem.ideaPageId);
+      const { analysis, languageHint } = analysisByIdea.get(reviewItem.ideaPageId);
       const currentItem = normalizeCurrentItem(reviewItem.type, reviewItem.currentItem || {});
       const prompt = buildCorrectionPrompt({
         type: reviewItem.type,
         analysis,
         currentItem,
         correctionNotes: notes,
+        languageHint,
       });
 
       let corrected;

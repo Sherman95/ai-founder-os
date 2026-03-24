@@ -3,6 +3,7 @@ const path = require("path");
 
 const { generateJson } = require("../services/geminiService");
 const { ideaAnalysisSchema } = require("../schemas/ideaAnalysis.schema");
+const { buildLanguageRule, detectInputLanguage } = require("../services/languageService");
 
 const promptPath = path.resolve(__dirname, "../../prompts/ideaAnalyzer.md");
 
@@ -31,9 +32,12 @@ function buildFallbackAnalysis(idea) {
   });
 }
 
-async function ideaAnalyzer(idea) {
+async function ideaAnalyzer(idea, options = {}) {
   const systemPrompt = fs.readFileSync(promptPath, "utf8");
-  const prompt = `${systemPrompt}\n\nINPUT IDEA:\n${JSON.stringify(
+  const languageHint = options.languageHint || detectInputLanguage(`${idea.title || ""} ${idea.description || ""}`);
+  const languageRule = buildLanguageRule({ languageHint });
+
+  const prompt = `${systemPrompt}\n\n${languageRule}\n\nINPUT IDEA:\n${JSON.stringify(
     {
       id: idea.id,
       title: idea.title,

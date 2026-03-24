@@ -75,7 +75,7 @@ async function requestJsonText({ prompt, model }) {
   );
 }
 
-async function generateJson({ prompt, schema, model = "gemini-2.0-flash" }) {
+async function generateJson({ prompt, schema, model = env.GEMINI_MODEL || "gemini-2.5-flash" }) {
   const maxRepairs = 2;
   let rawOutput = "";
   let currentPrompt = buildInitialPrompt(prompt);
