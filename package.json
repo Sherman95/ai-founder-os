@@ -1,6 +1,6 @@
 {
   "name": "ai-founder-os",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "main": "server/index.js",
   "scripts": {
     "dev": "nodemon server/index.js",
