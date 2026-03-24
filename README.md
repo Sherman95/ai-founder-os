@@ -1,4 +1,4 @@
-# AI Founder OS - Production-Ready Basic Backend (v0.2.2 Language Adaptive)
+# AI Founder OS - Production-Ready Basic Backend (v0.2.3 Prompt Enum Guard)
 
 AI Founder OS is a production-ready basic backend that uses Notion as UI + database + memory.
 The system polls a Notion database for startup ideas with Status `Run` or `Queued`, executes a multi-agent workflow, and writes outputs into Notion databases:
@@ -158,7 +158,7 @@ Example response:
 {
   "status": "ok",
   "time": "2026-03-21T10:00:00.000Z",
-  "version": "0.2.2"
+  "version": "0.2.3"
 }
 ```
 

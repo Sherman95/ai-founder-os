@@ -5,7 +5,7 @@ function createHealthTool({ startedAt }) {
     const uptimeSec = Math.floor((Date.now() - startedAt) / 1000);
     return {
       status: "ok",
-      version: "0.2.2",
+      version: "0.2.3",
       uptimeSec,
       notionMode: env.NOTION_MODE,
       time: new Date().toISOString(),
