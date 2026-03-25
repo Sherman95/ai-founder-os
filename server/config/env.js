@@ -7,6 +7,16 @@ const notionDbIdSchema = z
   .string()
   .regex(/^[a-f0-9]{32}$/i, "must be a 32-char Notion database ID (no dashes)");
 
+const optionalNotionDbIdSchema = z.preprocess(
+  (value) => {
+    if (value === "" || value === null || value === undefined) {
+      return undefined;
+    }
+    return value;
+  },
+  notionDbIdSchema.optional()
+);
+
 const nonPlaceholderSecret = (label) =>
   z
     .string()
@@ -54,6 +64,11 @@ const envSchema = z.object({
     (value) => value !== "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
     "NOTION_MARKETING_DB_ID must be replaced with a real value"
   ),
+  NOTION_RUNS_DB_ID: optionalNotionDbIdSchema,
+  NOTION_EVIDENCE_DB_ID: optionalNotionDbIdSchema,
+  NOTION_CLAIMS_DB_ID: optionalNotionDbIdSchema,
+  NOTION_FEATURE_MATRIX_DB_ID: optionalNotionDbIdSchema,
+  NOTION_SCORECARDS_DB_ID: optionalNotionDbIdSchema,
   GEMINI_API_KEY: nonPlaceholderSecret("GEMINI_API_KEY"),
   GEMINI_MODEL: z.string().default("gemini-2.5-flash"),
   TAVILY_API_KEY: z.string().optional(),
@@ -70,6 +85,10 @@ const envSchema = z.object({
   MAX_COMPETITORS: z.coerce.number().int().min(1).max(20).default(5),
   MAX_ROADMAP_ITEMS: z.coerce.number().int().min(1).max(30).default(7),
   MAX_MARKETING_ITEMS: z.coerce.number().int().min(1).max(30).default(7),
+  NOTION_UI_WOW_MODE: z
+    .enum(["true", "false", "1", "0", "TRUE", "FALSE"])
+    .optional()
+    .transform((value) => ["true", "1", "TRUE"].includes(value || "")),
 })
   .superRefine((data, ctx) => {
       if (data.WEB_SEARCH_ENABLED && !data.TAVILY_API_KEY) {
