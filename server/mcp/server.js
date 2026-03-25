@@ -10,6 +10,9 @@ const { createInspectSchemasTool } = require("./tools/inspectSchemas");
 const { createListIdeasToRunTool } = require("./tools/listIdeasToRun");
 const { createClaimIdeaTool } = require("./tools/claimIdea");
 const { createRunIdeaTool } = require("./tools/runIdea");
+const { createRetryRunTool } = require("./tools/retryRun");
+const { createReplayRunTool } = require("./tools/replayRun");
+const { createGetRunTool } = require("./tools/getRun");
 const { createListReviewsTool } = require("./tools/listReviews");
 const { createApplyCorrectionsTool } = require("./tools/applyCorrections");
 
@@ -24,6 +27,9 @@ const toolHandlers = {
   "founder.list_ideas_to_run": createListIdeasToRunTool({ notionProvider }),
   "founder.claim_idea": createClaimIdeaTool({ notionProvider }),
   "founder.run_idea": createRunIdeaTool({ notionProvider, workflowEngine }),
+  "founder.retry_run": createRetryRunTool({ notionProvider, workflowEngine }),
+  "founder.replay_run": createReplayRunTool({ notionProvider, workflowEngine }),
+  "founder.get_run": createGetRunTool({ notionProvider }),
   "founder.list_reviews": createListReviewsTool({ notionProvider }),
   "founder.apply_corrections": createApplyCorrectionsTool({ notionProvider }),
 };
@@ -35,6 +41,9 @@ function getToolsList() {
     { name: "founder.list_ideas_to_run", description: "List ideas in Run/Queued status" },
     { name: "founder.claim_idea", description: "Attempt to claim a specific idea for execution" },
     { name: "founder.run_idea", description: "Execute one complete workflow for one idea" },
+    { name: "founder.retry_run", description: "Retry a workflow in live mode" },
+    { name: "founder.replay_run", description: "Replay a workflow from a previous run artifact" },
+    { name: "founder.get_run", description: "Get one run audit snapshot by run page id" },
     { name: "founder.list_reviews", description: "List output rows flagged for human review" },
     { name: "founder.apply_corrections", description: "Apply human corrections to flagged output rows" },
   ];
