@@ -159,6 +159,38 @@ async function updateOutputItemByPageId(input = {}) {
   });
 }
 
+async function createRun(ideaPage, meta = {}) {
+  return apiService.createRun(ideaPage, meta);
+}
+
+async function updateRun(runPageId, patch = {}) {
+  return apiService.updateRun(runPageId, patch);
+}
+
+async function finalizeRun(runPageId, patch = {}) {
+  return apiService.finalizeRun(runPageId, patch);
+}
+
+async function createOrUpsertEvidence(input = {}) {
+  return apiService.createOrUpsertEvidence(input);
+}
+
+async function createOrUpsertClaims(input = {}) {
+  return apiService.createOrUpsertClaims(input);
+}
+
+async function createOrUpsertFeatureMatrix(input = {}) {
+  return apiService.createOrUpsertFeatureMatrix(input);
+}
+
+async function createOrUpsertScorecards(input = {}) {
+  return apiService.createOrUpsertScorecards(input);
+}
+
+async function getRunById(runPageId) {
+  return apiService.getRunById(runPageId);
+}
+
 module.exports = {
   queryStartupIdeasToRun,
   getIdeaById,
@@ -170,6 +202,14 @@ module.exports = {
   getOutputCounts,
   listReviewItems,
   updateOutputItemByPageId,
+  createRun,
+  updateRun,
+  finalizeRun,
+  createOrUpsertEvidence,
+  createOrUpsertClaims,
+  createOrUpsertFeatureMatrix,
+  createOrUpsertScorecards,
+  getRunById,
   validateConfiguredSchemas,
   inspectSchemas: validateConfiguredSchemas,
 };

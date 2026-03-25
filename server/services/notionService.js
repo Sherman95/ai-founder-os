@@ -52,6 +52,10 @@ function sanitizeKeyPart(value) {
     .slice(0, 80);
 }
 
+function sha1(input) {
+  return crypto.createHash("sha1").update(String(input || "")).digest("hex");
+}
+
 function buildKey(ideaPageId, type, name) {
   return `${ideaPageId}:${type}:${sanitizeKeyPart(name)}`;
 }
@@ -148,6 +152,29 @@ function toNotionPropertyValue(def, value) {
 
   if (def.type === "date") {
     return { date: { start: String(value) } };
+  }
+
+  if (def.type === "url") {
+    const url = String(value || "").trim();
+    if (!url) {
+      return null;
+    }
+    return { url };
+  }
+
+  if (def.type === "relation") {
+    if (Array.isArray(value)) {
+      const relation = value
+        .filter(Boolean)
+        .map((id) => ({ id: String(id) }));
+      return relation.length ? { relation } : null;
+    }
+
+    if (!value) {
+      return null;
+    }
+
+    return { relation: [{ id: String(value) }] };
   }
 
   return null;
@@ -250,6 +277,14 @@ function extractPlainTextByProperty(property) {
     return Number.isFinite(property.number) ? String(property.number) : "";
   }
 
+  if (property.type === "url") {
+    return property.url || "";
+  }
+
+  if (property.type === "relation") {
+    return (property.relation || []).map((v) => v.id).filter(Boolean).join(", ");
+  }
+
   return "";
 }
 
@@ -298,6 +333,70 @@ function getOutputDatabaseIdByType(type) {
   throw new Error(`Unsupported review type: ${type}`);
 }
 
+function isWowModeEnabled() {
+  return Boolean(env.NOTION_UI_WOW_MODE);
+}
+
+function getOptionalDatabaseId(type) {
+  if (type === "runs") {
+    return env.NOTION_RUNS_DB_ID;
+  }
+  if (type === "evidence") {
+    return env.NOTION_EVIDENCE_DB_ID;
+  }
+  if (type === "claims") {
+    return env.NOTION_CLAIMS_DB_ID;
+  }
+  if (type === "feature_matrix") {
+    return env.NOTION_FEATURE_MATRIX_DB_ID;
+  }
+  if (type === "scorecards") {
+    return env.NOTION_SCORECARDS_DB_ID;
+  }
+
+  return null;
+}
+
+function shouldWriteWowEntity(type) {
+  return isWowModeEnabled() && Boolean(getOptionalDatabaseId(type));
+}
+
+function shortIdeaKey(title) {
+  return sanitizeKeyPart(title || "idea").slice(0, 24);
+}
+
+function buildRunId(ideaTitle) {
+  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+  return `run_${stamp}_${shortIdeaKey(ideaTitle)}`;
+}
+
+function clampScore(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function computeOverallScore(input = {}) {
+  const penaltyMap = {
+    unclear_pricing: 8,
+    weak_evidence: 10,
+    non_official: 6,
+    contradictory: 12,
+    outdated: 5,
+  };
+
+  const base =
+    0.35 * Number(input.similarity_score || 0) +
+    0.2 * Number(input.pricing_clarity || 0) +
+    0.3 * Number(input.evidence_quality || 0) +
+    0.15 * Number(input.traction_signals || 0);
+
+  const penalty = (input.risk_flags || []).reduce((sum, key) => sum + (penaltyMap[key] || 0), 0);
+  return clampScore(base - penalty);
+}
+
 function buildFieldMapForType(type, item) {
   if (type === "competitor") {
     return [
@@ -311,6 +410,20 @@ function buildFieldMapForType(type, item) {
       { aliases: ["Weaknesses"], value: (item.weaknesses || []).join(", ") || "unknown" },
       { aliases: ["Notes"], value: item.notes || "" },
       { aliases: ["Evidence", "Search Snippet", "Snippet"], value: item.search_snippet || "" },
+      { aliases: ["Evidence Summary"], value: item.evidence_summary || item.search_snippet || "" },
+      { aliases: ["Confidence"], value: item.confidence ?? 0.5, allowedTypes: ["number", "rich_text"] },
+      {
+        aliases: ["Category"],
+        value: item.category || "direct",
+        allowedTypes: ["select", "multi_select", "rich_text"],
+      },
+      {
+        aliases: ["Pricing Model"],
+        value: item.pricing_model || "unknown",
+        allowedTypes: ["select", "multi_select", "rich_text"],
+      },
+      { aliases: ["ICP"], value: item.icp || "" },
+      { aliases: ["Key Differentiators"], value: item.key_differentiators || "" },
       { aliases: ["Market"], value: item.market || "" },
       { aliases: ["Website", "URL"], value: item.website || "" },
     ];
@@ -797,7 +910,7 @@ function applyReviewPropertiesToPayload(collectionProps, properties, reviewState
   }
 }
 
-async function upsertOutputItem(databaseId, ideaPageId, type, name, fieldMap, reviewState = null) {
+async function upsertOutputItem(databaseId, ideaPageId, type, name, fieldMap, reviewState = null, extraProperties = []) {
   const key = buildKey(ideaPageId, type, name);
   const collectionProps = await getCollectionProperties(databaseId);
   const titleProperty = await getTitlePropertyName(databaseId);
@@ -855,6 +968,18 @@ async function upsertOutputItem(databaseId, ideaPageId, type, name, fieldMap, re
     }
   }
 
+  for (const field of extraProperties) {
+    const meta = findPropertyMeta(collectionProps, field.aliases, field.allowedTypes || null);
+    if (!meta) {
+      continue;
+    }
+
+    const notionValue = toNotionPropertyValue(meta.def, field.value);
+    if (notionValue) {
+      properties[meta.name] = notionValue;
+    }
+  }
+
   applyReviewPropertiesToPayload(collectionProps, properties, reviewState);
 
   if (existing) {
@@ -867,17 +992,42 @@ async function upsertOutputItem(databaseId, ideaPageId, type, name, fieldMap, re
   return created.id;
 }
 
-async function createOrUpsertCompetitors(ideaPageId, competitors) {
+async function createOrUpsertCompetitors(ideaPageId, competitors, options = {}) {
   for (const competitor of competitors) {
     const fieldMap = buildFieldMapForType("competitor", competitor);
+    const relatedEvidence = (options.evidenceItems || [])
+      .filter((item) => {
+        const snippet = String(item.snippet || "").toLowerCase();
+        return snippet.includes(String(competitor.name || "").toLowerCase());
+      })
+      .map((item) => item.id)
+      .filter(Boolean)
+      .slice(0, 8);
 
-    await upsertOutputItem(
+    const extraProperties = [
+      {
+        aliases: ["Run"],
+        value: options.runPageId,
+        allowedTypes: ["relation", "rich_text", "title"],
+      },
+      {
+        aliases: ["Evidence"],
+        value: relatedEvidence,
+        allowedTypes: ["relation", "rich_text", "title"],
+      },
+    ];
+
+    const pageId = await upsertOutputItem(
       env.NOTION_COMPETITORS_DB_ID,
       ideaPageId,
       "competitor",
       competitor.name,
-      fieldMap
+      fieldMap,
+      null,
+      extraProperties
     );
+
+    competitor.pageId = pageId;
   }
 
   logger.info({ ts: new Date().toISOString(), ideaPageId, count: competitors.length }, "Upserted competitors");
@@ -1133,6 +1283,401 @@ async function updateOutputItemByPageId({ type, pageId, ideaPageId, item, review
   await notion.pages.update({ page_id: pageId, properties });
 }
 
+async function upsertGenericEntity({
+  databaseId,
+  key,
+  title,
+  ideaPageId,
+  fieldMap,
+  extraProperties = [],
+}) {
+  const collectionProps = await getCollectionProperties(databaseId);
+  const titleProperty = await getTitlePropertyName(databaseId);
+  const keyMeta = findPropertyMeta(collectionProps, ["Key"], ["rich_text", "title"]);
+  const sourceMeta = findPropertyMeta(collectionProps, ["Source Idea", "Idea", "Startup Idea"], [
+    "relation",
+    "rich_text",
+    "title",
+    "select",
+    "multi_select",
+  ]);
+  const titleMeta = { name: titleProperty, def: collectionProps[titleProperty] };
+
+  let existing = null;
+  if (keyMeta) {
+    existing = await findByKey(databaseId, key);
+  }
+  if (!existing && sourceMeta) {
+    existing = await findBySourceAndTitle(databaseId, sourceMeta, ideaPageId, titleMeta, title);
+  }
+
+  const properties = {
+    [titleProperty]: asTitle(title),
+  };
+
+  if (keyMeta) {
+    const keyValue = toNotionPropertyValue(keyMeta.def, key);
+    if (keyValue) {
+      properties[keyMeta.name] = keyValue;
+    }
+  }
+
+  if (sourceMeta && ideaPageId) {
+    const sourceValue = toNotionPropertyValue(sourceMeta.def, ideaPageId);
+    if (sourceValue) {
+      properties[sourceMeta.name] = sourceValue;
+    }
+  }
+
+  for (const field of [...fieldMap, ...extraProperties]) {
+    const meta = findPropertyMeta(collectionProps, field.aliases, field.allowedTypes || null);
+    if (!meta) {
+      continue;
+    }
+    const notionValue = toNotionPropertyValue(meta.def, field.value);
+    if (notionValue) {
+      properties[meta.name] = notionValue;
+    }
+  }
+
+  if (existing) {
+    await notion.pages.update({ page_id: existing.id, properties });
+    return existing.id;
+  }
+
+  const created = await createPageInCollection(databaseId, properties);
+  return created.id;
+}
+
+async function createRun(ideaPage, meta = {}) {
+  if (!shouldWriteWowEntity("runs")) {
+    return null;
+  }
+
+  const runsDbId = getOptionalDatabaseId("runs");
+  const runId = buildRunId(ideaPage?.title);
+  const stageLog = `Run started at ${meta.startedAt || new Date().toISOString()}`;
+
+  const id = await upsertGenericEntity({
+    databaseId: runsDbId,
+    key: runId,
+    title: runId,
+    ideaPageId: ideaPage.id,
+    fieldMap: [
+      { aliases: ["Status"], value: meta.status || "Running", allowedTypes: ["status", "select", "multi_select", "rich_text"] },
+      { aliases: ["Mode"], value: meta.mode || "live", allowedTypes: ["select", "multi_select", "rich_text"] },
+      { aliases: ["Web Search Enabled"], value: Boolean(meta.webSearchEnabled), allowedTypes: ["checkbox", "select"] },
+      { aliases: ["Web Provider"], value: meta.webProvider || "none", allowedTypes: ["select", "multi_select", "rich_text"] },
+      { aliases: ["Started At"], value: meta.startedAt || new Date().toISOString(), allowedTypes: ["date", "rich_text"] },
+      { aliases: ["Version"], value: meta.version || "0.3.0", allowedTypes: ["rich_text", "title"] },
+      { aliases: ["Tag/Release"], value: meta.tagRelease || "", allowedTypes: ["url", "rich_text"] },
+      { aliases: ["Run Log"], value: stageLog, allowedTypes: ["rich_text", "title"] },
+      { aliases: ["Search Queries"], value: "", allowedTypes: ["rich_text", "title"] },
+    ],
+  });
+
+  return { id, runId };
+}
+
+async function updateRun(runPageId, patch = {}) {
+  if (!runPageId || !shouldWriteWowEntity("runs")) {
+    return;
+  }
+
+  const runsDbId = getOptionalDatabaseId("runs");
+  const collectionProps = await getCollectionProperties(runsDbId);
+  const properties = {};
+  const fields = [
+    { aliases: ["Status"], value: patch.status, allowedTypes: ["status", "select", "multi_select", "rich_text"] },
+    { aliases: ["Finished At"], value: patch.finishedAt, allowedTypes: ["date", "rich_text"] },
+    { aliases: ["Duration (ms)", "Duration"], value: patch.durationMs, allowedTypes: ["number", "rich_text"] },
+    { aliases: ["Error Stage"], value: patch.errorStage, allowedTypes: ["select", "multi_select", "rich_text"] },
+    { aliases: ["Error Message"], value: patch.errorMessage, allowedTypes: ["rich_text", "title"] },
+    { aliases: ["Run Log"], value: patch.runLog, allowedTypes: ["rich_text", "title"] },
+    { aliases: ["Search Queries"], value: patch.searchQueries, allowedTypes: ["rich_text", "title"] },
+    { aliases: ["Evidence Count"], value: patch.evidenceCount, allowedTypes: ["number", "rich_text"] },
+    { aliases: ["Competitors Written"], value: patch.competitorsWritten, allowedTypes: ["number", "rich_text"] },
+    { aliases: ["Roadmap Items Written"], value: patch.roadmapItemsWritten, allowedTypes: ["number", "rich_text"] },
+    { aliases: ["Marketing Items Written"], value: patch.marketingItemsWritten, allowedTypes: ["number", "rich_text"] },
+    { aliases: ["Judge Summary"], value: patch.judgeSummary, allowedTypes: ["rich_text", "title"] },
+    { aliases: ["Artifact JSON"], value: patch.artifactJson, allowedTypes: ["rich_text", "url"] },
+  ];
+
+  for (const field of fields) {
+    if (field.value === undefined) {
+      continue;
+    }
+    const meta = findPropertyMeta(collectionProps, field.aliases, field.allowedTypes || null);
+    if (!meta) {
+      continue;
+    }
+    const notionValue = toNotionPropertyValue(meta.def, field.value);
+    if (notionValue) {
+      properties[meta.name] = notionValue;
+    }
+  }
+
+  if (Object.keys(properties).length === 0) {
+    return;
+  }
+
+  await notion.pages.update({ page_id: runPageId, properties });
+}
+
+async function finalizeRun(runPageId, patch = {}) {
+  await updateRun(runPageId, patch);
+}
+
+async function createOrUpsertEvidence({ runPageId, ideaPageId, evidenceRows = [], mode = "live" }) {
+  if (!shouldWriteWowEntity("evidence")) {
+    return [];
+  }
+
+  const evidenceDbId = getOptionalDatabaseId("evidence");
+  const written = [];
+
+  for (let i = 0; i < evidenceRows.length; i += 1) {
+    const row = evidenceRows[i];
+    const url = String(row.url || "").trim();
+    if (!url) {
+      continue;
+    }
+
+    const evidenceId = `ev_${sha1(url).slice(0, 12)}`;
+    const key = `${runPageId || "no_run"}:${sha1(url)}`;
+    const confidence = mode === "replay" ? 0.6 : 0.8;
+
+    const id = await upsertGenericEntity({
+      databaseId: evidenceDbId,
+      key,
+      title: evidenceId,
+      ideaPageId,
+      fieldMap: [
+        { aliases: ["Query"], value: row.query || "", allowedTypes: ["rich_text", "title"] },
+        { aliases: ["Title"], value: row.title || "", allowedTypes: ["rich_text", "title"] },
+        { aliases: ["URL", "Website"], value: url, allowedTypes: ["url", "rich_text"] },
+        { aliases: ["Domain"], value: row.domain || "", allowedTypes: ["select", "multi_select", "rich_text"] },
+        { aliases: ["Snippet", "Evidence"], value: row.snippet || "", allowedTypes: ["rich_text", "title"] },
+        { aliases: ["Retrieved At"], value: new Date().toISOString(), allowedTypes: ["date", "rich_text"] },
+        {
+          aliases: ["Source Type"],
+          value: row.url?.includes("pricing") ? "pricing_page" : "web_search",
+          allowedTypes: ["select", "multi_select", "rich_text"],
+        },
+        { aliases: ["Confidence"], value: confidence, allowedTypes: ["number", "rich_text"] },
+        {
+          aliases: ["Is Official Site"],
+          value: Boolean(row.domain) && String(row.url || "").includes(String(row.domain || "")),
+          allowedTypes: ["checkbox", "select"],
+        },
+      ],
+      extraProperties: [
+        {
+          aliases: ["Run"],
+          value: runPageId,
+          allowedTypes: ["relation", "rich_text", "title"],
+        },
+      ],
+    });
+
+    written.push({
+      id,
+      key,
+      url,
+      snippet: row.snippet || "",
+      domain: row.domain || "",
+      query: row.query || "",
+      title: row.title || "",
+    });
+  }
+
+  return written;
+}
+
+async function createOrUpsertClaims({ runPageId, ideaPageId, claims = [], competitors = [], evidenceItems = [] }) {
+  if (!shouldWriteWowEntity("claims")) {
+    return [];
+  }
+
+  const claimsDbId = getOptionalDatabaseId("claims");
+  const competitorByName = new Map((competitors || []).map((item) => [String(item.name || "").toLowerCase(), item]));
+  const evidenceByUrl = new Map((evidenceItems || []).map((item) => [item.url, item]));
+  const written = [];
+
+  for (const claim of claims) {
+    const statement = claim.statement || claim.claim || "";
+    const competitorName = claim.competitor_name || "Unknown Competitor";
+    const key = `${runPageId || "no_run"}:${sanitizeKeyPart(competitorName)}:${claim.claim_type}:${sha1(statement)}`;
+    const hasEvidence = Array.isArray(claim.evidence_urls) && claim.evidence_urls.length > 0;
+    const verdict = hasEvidence ? claim.verdict : "unknown";
+    const sourceCompetitor = competitorByName.get(String(competitorName).toLowerCase());
+    const evidenceIds = (claim.evidence_urls || [])
+      .map((url) => evidenceByUrl.get(url)?.id)
+      .filter(Boolean)
+      .slice(0, 12);
+
+    const id = await upsertGenericEntity({
+      databaseId: claimsDbId,
+      key,
+      title: claim.claim || statement.slice(0, 120) || "Claim",
+      ideaPageId,
+      fieldMap: [
+        {
+          aliases: ["Claim Type"],
+          value: claim.claim_type || "other",
+          allowedTypes: ["select", "multi_select", "rich_text"],
+        },
+        { aliases: ["Statement"], value: statement, allowedTypes: ["rich_text", "title"] },
+        {
+          aliases: ["Verdict"],
+          value: verdict,
+          allowedTypes: ["select", "multi_select", "rich_text"],
+        },
+        { aliases: ["Confidence"], value: claim.confidence ?? 0.5, allowedTypes: ["number", "rich_text"] },
+        { aliases: ["Why it matters", "Why it matters?"], value: claim.why_it_matters || "", allowedTypes: ["rich_text", "title"] },
+        { aliases: ["Needs Review"], value: verdict === "unknown", allowedTypes: ["checkbox"] },
+        { aliases: ["Correction Notes"], value: "", allowedTypes: ["rich_text", "title"] },
+      ],
+      extraProperties: [
+        { aliases: ["Run"], value: runPageId, allowedTypes: ["relation", "rich_text", "title"] },
+        {
+          aliases: ["Competitor"],
+          value: sourceCompetitor?.pageId,
+          allowedTypes: ["relation", "rich_text", "title"],
+        },
+        { aliases: ["Evidence"], value: evidenceIds, allowedTypes: ["relation", "rich_text", "title"] },
+      ],
+    });
+
+    written.push({ id, key });
+  }
+
+  return written;
+}
+
+async function createOrUpsertFeatureMatrix({ runPageId, ideaPageId, featureMatrix = [], competitors = [], evidenceItems = [] }) {
+  if (!shouldWriteWowEntity("feature_matrix")) {
+    return [];
+  }
+
+  const matrixDbId = getOptionalDatabaseId("feature_matrix");
+  const evidenceByUrl = new Map((evidenceItems || []).map((item) => [item.url, item]));
+  const written = [];
+
+  for (const row of featureMatrix) {
+    const competitorName = row.competitor_name || "Unknown Competitor";
+    const key = `${runPageId || "no_run"}:${sanitizeKeyPart(competitorName)}:${sanitizeKeyPart(row.feature)}`;
+    const evidenceIds = (row.evidence_urls || [])
+      .map((url) => evidenceByUrl.get(url)?.id)
+      .filter(Boolean)
+      .slice(0, 12);
+
+    const id = await upsertGenericEntity({
+      databaseId: matrixDbId,
+      key,
+      title: row.feature || "Feature",
+      ideaPageId,
+      fieldMap: [
+        { aliases: ["Support"], value: row.support || "unknown", allowedTypes: ["select", "multi_select", "rich_text"] },
+        { aliases: ["Notes"], value: row.notes || "", allowedTypes: ["rich_text", "title"] },
+        { aliases: ["Confidence"], value: row.confidence ?? 0.5, allowedTypes: ["number", "rich_text"] },
+        {
+          aliases: ["Feature Category"],
+          value: row.feature_category || "core",
+          allowedTypes: ["select", "multi_select", "rich_text"],
+        },
+      ],
+      extraProperties: [
+        { aliases: ["Run"], value: runPageId, allowedTypes: ["relation", "rich_text", "title"] },
+        { aliases: ["Evidence"], value: evidenceIds, allowedTypes: ["relation", "rich_text", "title"] },
+      ],
+    });
+
+    written.push({ id, key });
+  }
+
+  return written;
+}
+
+async function createOrUpsertScorecards({ runPageId, ideaPageId, scorecardInputs = [] }) {
+  if (!shouldWriteWowEntity("scorecards")) {
+    return [];
+  }
+
+  const scoreDbId = getOptionalDatabaseId("scorecards");
+  const written = [];
+
+  for (const input of scorecardInputs) {
+    const competitorName = input.competitor_name || "Unknown Competitor";
+    const key = `${runPageId || "no_run"}:${sanitizeKeyPart(competitorName)}`;
+    const summary = [
+      `Similarity: ${clampScore(input.similarity_score)}`,
+      `Pricing clarity: ${clampScore(input.pricing_clarity)}`,
+      `Evidence quality: ${clampScore(input.evidence_quality)}`,
+      `Traction signals: ${clampScore(input.traction_signals)}`,
+      `Risk flags: ${(input.risk_flags || []).join(", ") || "none"}`,
+    ].join("\n");
+
+    const id = await upsertGenericEntity({
+      databaseId: scoreDbId,
+      key,
+      title: `${competitorName} Scorecard`,
+      ideaPageId,
+      fieldMap: [
+        { aliases: ["Overall Score"], value: computeOverallScore(input), allowedTypes: ["number", "rich_text"] },
+        { aliases: ["Similarity Score"], value: clampScore(input.similarity_score), allowedTypes: ["number", "rich_text"] },
+        { aliases: ["Pricing Clarity"], value: clampScore(input.pricing_clarity), allowedTypes: ["number", "rich_text"] },
+        { aliases: ["Evidence Quality"], value: clampScore(input.evidence_quality), allowedTypes: ["number", "rich_text"] },
+        { aliases: ["Traction Signals"], value: clampScore(input.traction_signals), allowedTypes: ["number", "rich_text"] },
+        {
+          aliases: ["Risk Flags"],
+          value: input.risk_flags || [],
+          allowedTypes: ["multi_select", "select", "rich_text"],
+        },
+        { aliases: ["Summary"], value: summary, allowedTypes: ["rich_text", "title"] },
+      ],
+      extraProperties: [
+        { aliases: ["Run"], value: runPageId, allowedTypes: ["relation", "rich_text", "title"] },
+      ],
+    });
+
+    written.push({ id, key });
+  }
+
+  return written;
+}
+
+async function getRunById(runPageId) {
+  if (!runPageId || !shouldWriteWowEntity("runs")) {
+    return null;
+  }
+
+  const page = await notion.pages.retrieve({ page_id: runPageId });
+  const properties = page.properties || {};
+  const readBy = (aliases) => {
+    const meta = findPropertyMeta(properties, aliases);
+    return meta ? extractPlainTextByProperty(properties[meta.name]) : "";
+  };
+
+  return {
+    id: page.id,
+    runId: getTitleValue(page),
+    status: readBy(["Status"]),
+    mode: readBy(["Mode"]),
+    startedAt: readBy(["Started At"]),
+    finishedAt: readBy(["Finished At"]),
+    durationMs: Number(readBy(["Duration (ms)", "Duration"]) || 0),
+    evidenceCount: Number(readBy(["Evidence Count"]) || 0),
+    competitorsWritten: Number(readBy(["Competitors Written"]) || 0),
+    roadmapItemsWritten: Number(readBy(["Roadmap Items Written"]) || 0),
+    marketingItemsWritten: Number(readBy(["Marketing Items Written"]) || 0),
+    errorStage: readBy(["Error Stage"]),
+    errorMessage: readBy(["Error Message"]),
+    runLog: readBy(["Run Log"]),
+    artifactJson: readBy(["Artifact JSON"]),
+  };
+}
+
 module.exports = {
   queryStartupIdeasToRun,
   getIdeaById,
@@ -1143,6 +1688,14 @@ module.exports = {
   createOrUpsertCompetitors,
   createOrUpsertRoadmap,
   createOrUpsertMarketing,
+  createRun,
+  updateRun,
+  finalizeRun,
+  createOrUpsertEvidence,
+  createOrUpsertClaims,
+  createOrUpsertFeatureMatrix,
+  createOrUpsertScorecards,
+  getRunById,
   getOutputCounts,
   listReviewItems,
   updateOutputItemByPageId,
