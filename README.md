@@ -1,4 +1,4 @@
-# AI Founder OS - Production-Ready Basic Backend (v0.3.0 Real Competitive Intelligence)
+# AI Founder OS - Notion Run Center Backend (v0.4.0 Agentic Run Audit)
 
 AI Founder OS is a production-ready basic backend that uses Notion as UI + database + memory.
 The system polls a Notion database for startup ideas with Status `Run` or `Queued`, executes a multi-agent workflow, and writes outputs into Notion databases:
@@ -8,14 +8,22 @@ The system polls a Notion database for startup ideas with Status `Run` or `Queue
 - Marketing Strategy
 
 Competitor research is grounded on real web search evidence (when enabled) and then structured by Gemini.
+The workflow now supports an auditable Run Center model in Notion with optional entities:
+
+- Runs
+- Evidence
+- Claims
+- Feature Matrix
+- Competitor Scorecards
 
 It also writes a startup viability score and executive summary back to the idea.
 
-This release adds MCP support in two directions:
+This release includes MCP support in two directions:
 
 - Provider mode switch for Notion access: `NOTION_MODE=api|mcp`
 - Founder OS MCP server exposing high-level tools (`founder.*`)
 - Human-in-the-loop corrections loop for output rows flagged in Notion
+- Run operations: Retry, Replay and Get Run snapshot
 
 ## Stack
 
@@ -52,6 +60,7 @@ server/
   schemas/
     ideaAnalysis.schema.js
     competitor.schema.js
+    marketResearchOutput.schema.js
     roadmap.schema.js
     marketing.schema.js
   scripts/
@@ -65,6 +74,9 @@ server/
       listIdeasToRun.js
       claimIdea.js
       runIdea.js
+      retryRun.js
+      replayRun.js
+      getRun.js
       listReviews.js
       applyCorrections.js
 prompts/
@@ -94,11 +106,17 @@ Copy `.env.example` to `.env` and fill values:
 - `NOTION_COMPETITORS_DB_ID`
 - `NOTION_ROADMAP_DB_ID`
 - `NOTION_MARKETING_DB_ID`
+- `NOTION_RUNS_DB_ID` (optional, required when `NOTION_UI_WOW_MODE=true`)
+- `NOTION_EVIDENCE_DB_ID` (optional, required when `NOTION_UI_WOW_MODE=true`)
+- `NOTION_CLAIMS_DB_ID` (optional, required when `NOTION_UI_WOW_MODE=true`)
+- `NOTION_FEATURE_MATRIX_DB_ID` (optional, required when `NOTION_UI_WOW_MODE=true`)
+- `NOTION_SCORECARDS_DB_ID` (optional, required when `NOTION_UI_WOW_MODE=true`)
 - `GEMINI_API_KEY`
 - `GEMINI_MODEL` (default `gemini-2.5-flash`)
 - `TAVILY_API_KEY` (required when `WEB_SEARCH_ENABLED=true`)
 - `WEB_SEARCH_ENABLED` (`true` or `false`, default `false`)
 - `WEB_SEARCH_MAX_RESULTS` (default `5`, max `10`)
+- `NOTION_UI_WOW_MODE` (`true` or `false`, default `false`)
 - `NOTION_MCP_ENDPOINT` (required in `mcp` mode)
 - `NOTION_OAUTH_CLIENT_ID` (required in `mcp` mode)
 - `NOTION_OAUTH_CLIENT_SECRET` (required in `mcp` mode)
@@ -193,6 +211,9 @@ Exposed tools:
 - `founder.list_ideas_to_run`
 - `founder.claim_idea`
 - `founder.run_idea`
+- `founder.retry_run`
+- `founder.replay_run`
+- `founder.get_run`
 - `founder.list_reviews`
 - `founder.apply_corrections`
 
@@ -207,6 +228,8 @@ VS Code MCP setup details are documented in `docs/VS_CODE_MCP_SETUP.md`.
 4. Workflow marks idea as `Running`.
 5. Agents produce:
    - Competitors
+  - Claims
+  - Feature matrix candidates
    - Roadmap
    - Marketing items
 6. Notion output DBs are upserted with idempotency key:
@@ -218,6 +241,14 @@ VS Code MCP setup details are documented in `docs/VS_CODE_MCP_SETUP.md`.
    - `Run Log`
 
 On failure, idea status becomes `Failed` and `Run Log` stores the error.
+
+When `NOTION_UI_WOW_MODE=true` and optional DB IDs are configured, each run also:
+
+- Creates a Run row with mode/status/timestamps
+- Persists raw web search results as Evidence rows (deduped by URL per run)
+- Writes Claims rows with verdicts and confidence
+- Writes Feature Matrix rows for competitor-feature coverage
+- Writes Scorecards rows with deterministic weighted scoring and risk flags
 
 ## Required Notion properties
 
@@ -252,6 +283,88 @@ Recommended fields:
 - Competitors grounded fields: `Website`, `Source`, `Evidence`
 - Roadmap: `Priority`, `Complexity`, `Status`
 - Marketing: `Channel`, `Strategy`, `Content Idea`, `Priority`
+
+### Optional WOW DBs (enabled by `NOTION_UI_WOW_MODE`)
+
+Runs DB recommended fields:
+
+- `Run ID` (Title)
+- `Idea` (relation or rich text)
+- `Status`
+- `Mode`
+- `Web Search Enabled`
+- `Web Provider`
+- `Started At`
+- `Finished At`
+- `Duration (ms)`
+- `Version`
+- `Tag/Release`
+- `Error Stage`
+- `Error Message`
+- `Run Log`
+- `Artifact JSON`
+- `Search Queries`
+- `Evidence Count`
+- `Competitors Written`
+- `Roadmap Items Written`
+- `Marketing Items Written`
+- `Judge Summary`
+
+Evidence DB recommended fields:
+
+- `Evidence ID` (Title)
+- `Run`
+- `Idea`
+- `Query`
+- `Title`
+- `URL`
+- `Domain`
+- `Snippet`
+- `Retrieved At`
+- `Source Type`
+- `Confidence`
+- `Is Official Site`
+
+Claims DB recommended fields:
+
+- `Claim` (Title)
+- `Idea`
+- `Run`
+- `Competitor`
+- `Claim Type`
+- `Statement`
+- `Verdict`
+- `Evidence`
+- `Confidence`
+- `Why it matters`
+- `Needs Review`
+- `Correction Notes`
+
+Feature Matrix DB recommended fields:
+
+- `Feature` (Title)
+- `Idea`
+- `Run`
+- `Competitor`
+- `Support`
+- `Evidence`
+- `Notes`
+- `Confidence`
+- `Feature Category`
+
+Scorecards DB recommended fields:
+
+- `Scorecard` (Title)
+- `Idea`
+- `Run`
+- `Competitor`
+- `Overall Score`
+- `Similarity Score`
+- `Pricing Clarity`
+- `Evidence Quality`
+- `Traction Signals`
+- `Risk Flags`
+- `Summary`
 
 ## Reliability notes
 
@@ -293,4 +406,4 @@ If review columns do not exist, the tools return zero items without crashing.
    - idea status `Running` then `Done`
    - score and summary written
    - rows created/upserted in 3 output DBs
-6. Re-run same idea and verify no duplicate rows.
+6. Re-run same idea and verify no duplicate rows.2
