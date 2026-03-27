@@ -1,6 +1,7 @@
 {
   "name": "ai-founder-os",
   "version": "0.4.0",
+  "description": "AI-powered multi-agent backend that turns Notion into a founder control plane. Analyzes startup ideas, researches competitors, generates roadmaps and marketing strategies.",
   "main": "server/index.js",
   "scripts": {
     "dev": "nodemon server/index.js",
@@ -8,18 +9,29 @@
     "inspect:schemas": "node server/scripts/inspectNotionSchemas.js",
     "workflow:once": "node server/scripts/runWorkflowOnce.js",
     "mcp": "node server/mcp/server.js",
+    "mcp:stdio": "node server/mcp/mcpStdioTransport.js",
     "demo:mcp": "node examples/mcpClientDemo.js",
     "demo:challenge": "node examples/challengeDemo.js",
     "smoke": "node server/scripts/smokeCheck.js",
-    "test": "npm run smoke"
+    "test": "node --test tests/",
+    "test:smoke": "npm run smoke"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "keywords": [
+    "notion",
+    "mcp",
+    "ai",
+    "gemini",
+    "startup",
+    "multi-agent"
+  ],
+  "author": "AI Founder OS Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sherman95/ai-founder-os"
+  },
   "dependencies": {
     "@google/genai": "^1.46.0",
-    "@google/generative-ai": "^0.24.1",
     "@notionhq/client": "^5.14.0",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",

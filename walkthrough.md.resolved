@@ -1,0 +1,311 @@
+# Análisis a Fondo: AI Founder OS
+
+## Resumen del Proyecto
+
+**AI Founder OS** es un backend Node.js/Express (v0.4.0) que usa **Notion como UI/DB/memoria** y **Gemini 2.5 Flash** como motor de IA para ejecutar workflows multi-agente de análisis de startups. Dado un ID de idea en Notion con status [Run](file:///d:/Documents/Visual%20Studio%20Works/ai-founder-os/server/services/notionService.js#1382-1426) o `Queued`, el sistema orquesta 4 agentes de IA, genera investigación de mercado, roadmap de producto y estrategia de marketing, y escribe todo de vuelta a Notion.
+
+---
+
+## Arquitectura
+
+```mermaid
+flowchart TB
+    subgraph Notion["☁️ Notion (UI + Database)"]
+        Ideas["Startup Ideas DB"]
+        Comp["Competitors DB"]
+        Roadmap["Roadmap DB"]
+        Mktg["Marketing DB"]
+        Runs["Runs DB (WOW)"]
+        Evidence["Evidence DB (WOW)"]
+        Claims["Claims DB (WOW)"]
+        FM["Feature Matrix DB (WOW)"]
+        SC["Scorecards DB (WOW)"]
+    end
+
+    subgraph Server["🖥️ Express Server"]
+        Poller["Poller (interval)"]
+        WE["Workflow Engine"]
+        IA["Idea Analyzer Agent"]
+        MR["Market Research Agent"]
+        PP["Product Planner Agent"]
+        MA["Marketing Agent"]
+    end
+
+    subgraph Services["⚙️ Services"]
+        NS["notionService.js (1703 líneas)"]
+        GS["geminiService.js"]
+        WS["webSearchService.js (Tavily)"]
+        LS["languageService.js"]
+        RS["reviewService.js"]
+    end
+
+    subgraph MCP["🔌 MCP Server (JSON-RPC)"]
+        Tools["10 founder.* tools"]
+    end
+
+    Ideas -->|poll| Poller
+    Poller --> WE
+    WE --> IA --> MR --> PP --> MA
+    IA & MR & PP & MA --> GS
+    MR --> WS
+    WE --> NS
+    NS --> Comp & Roadmap & Mktg & Runs & Evidence & Claims & FM & SC
+    Tools --> NS & WE & RS
+```
+
+### Stack Tecnológico
+
+| Componente | Tecnología | Versión |
+|---|---|---|
+| Runtime | Node.js | 18+ |
+| Framework | Express | 5.2.1 |
+| Base de Datos/UI | Notion API | @notionhq/client 5.14.0 |
+| LLM | Gemini | @google/genai 1.46.0 |
+| Validación | Zod | 4.3.6 |
+| Búsqueda Web | Tavily API | HTTP directo |
+| Logging | Pino | 10.3.1 |
+| Dev Server | Nodemon | 3.1.14 |
+
+---
+
+## Estructura de Archivos (38+ archivos fuente)
+
+| Directorio | Archivos | Responsabilidad |
+|---|---|---|
+| `server/config/` | 1 | Validación Zod de 40+ variables de entorno |
+| `server/orchestrator/` | 2 | Motor de workflow + poller con concurrency guard |
+| `server/agents/` | 4 | Agentes IA: análisis, investigación, roadmap, marketing |
+| `server/services/` | 9 | Notion (55KB), Gemini, búsqueda web, idiomas, reviews |
+| `server/schemas/` | 5 | Contratos Zod para outputs de cada agente |
+| `server/mcp/` | 11 | Servidor MCP con 10 tools JSON-RPC |
+| `server/scripts/` | 4 | Utilidades: smoke check, inspect schemas, bootstrap WOW |
+| `prompts/` | 7 | Prompts en markdown para agentes + correcciones |
+| `examples/` | 2 | Demos de cliente MCP |
+
+---
+
+## Análisis por Componente
+
+### 1. Configuración (`env.js`) — ✅ Excelente
+
+- Validación exhaustiva con **Zod** de 40+ variables
+- Rechaza _placeholders_ (evita arrancar con credenciales dummy)
+- Validación condicional: `NOTION_TOKEN` solo en modo `api`, OAuth en modo `mcp`
+- Coerción de tipos seguros (números, booleanos)
+- Rangos sensatos (poll 30s–120s, max competitors 1–20)
+
+### 2. Orchestrator — ✅ Bien diseñado
+
+**Poller** ([poller.js](file:///d:/Documents/Visual%20Studio%20Works/ai-founder-os/server/orchestrator/poller.js)):
+- Guard de concurrencia: `isProcessing` flag previene ejecución paralela
+- Procesa una idea por tick (conservador pero seguro para MVP)
+- Graceful shutdown: `SIGINT`/`SIGTERM` detienen el poller
+
+**Workflow Engine** ([workflowEngine.js](file:///d:/Documents/Visual%20Studio%20Works/ai-founder-os/server/orchestrator/workflowEngine.js)):
+- Pipeline secuencial: `analyze → research → write → done`
+- **Claim pattern**: verifica status antes de procesar (evita procesamiento duplicado)
+- **Run audit**: crea registro de ejecución con timestamps, duración, error stage
+- Manejo robusto de errores: marca idea como `Failed` con log detallado
+- Soporte para `replay` (re-ejecutar desde artefacto guardado)
+
+### 3. Agentes de IA — ✅ Patrón consistente
+
+Los 4 agentes siguen el mismo patrón:
+
+```
+1. Leer prompt de archivo .md
+2. Detectar idioma del input
+3. Construir prompt con regla de idioma + constraints
+4. Llamar geminiService.generateJson()
+5. Si falla (cuota): retornar fallback determinístico
+```
+
+**Fortalezas**:
+- Cada agente tiene un **fallback robusto** que genera datos plausibles si Gemini no responde
+- Salidas validadas por Zod con retry (hasta 2 intentos de reparación)
+- Auto-adaptación de idioma (detecta español, inglés, portugués, francés, etc.)
+- Separación limpia: prompts en markdown, schemas en archivos Zod, lógica en agentes
+
+### 4. Gemini Service — ✅ Resiliente
+
+- **Auto-repair loop**: si la salida JSON no es válida, construye un "repair prompt" y reintenta hasta 2 veces
+- Detección de errores de cuota (429, `RESOURCE_EXHAUSTED`)
+- `stripCodeFences()`: limpia markdown residual de respuestas LLM
+- `responseMimeType: "application/json"`: pide JSON nativo a la API
+- Temperatura 0.2: output determinístico para consistency
+
+### 5. Notion Service — ⚠️ Archivo masivo (1703 líneas, 69 funciones)
+
+Este es el archivo más grande y complejo. Maneja toda la interacción con Notion.
+
+**Fortalezas**:
+- **Mapeo adaptativo**: detecta tipos de propiedades dinámicamente (status, select, multi_select)
+- **Property aliases**: soporta nombres en español/inglés (`"Revisar"`, `"Needs Review"`)
+- **Upsert idempotente**: busca por `Key`, fallback por `Source Idea + title`
+- **Caches**: `dbTitleCache`, `statusPropertyCache`, `collectionPropertiesCache`
+- Compatible con Notion API v5 (`databases` y `dataSources`)
+- **WOW Mode**: escritura opcional de entidades avanzadas (Evidence, Claims, Feature Matrix, Scorecards)
+- **Scoring determinístico**: `computeOverallScore()` con pesos y penalizaciones
+
+**Problemas**:
+- **God Object**: 1703 líneas en un solo archivo — debería dividirse en módulos más pequeños
+- Sin pruebas unitarias
+
+### 6. Notion Provider — ✅ Strategy Pattern limpio
+
+```javascript
+const provider = env.NOTION_MODE === "mcp" ? mcpService : apiService;
+```
+
+Permite cambiar entre Notion API directo y MCP con una sola variable de entorno.
+
+### 7. MCP Server — ✅ Implementación correcta
+
+- 10 tools expuestos via JSON-RPC sobre HTTP (`POST /mcp`)
+- Conformidad parcial con el protocolo MCP
+- Health endpoint separado (`GET /mcp/health`)
+- Tools cubren todo el ciclo: list → claim → run → retry → replay → review → correct
+
+### 8. Web Search (Tavily) — ✅ Bien implementado
+
+- Construcción inteligente de queries: usa Gemini para extraer keywords, fallback con tokenización
+- Deduplicación de resultados por URL+título
+- `Promise.allSettled()`: una query fallida no bloquea las demás
+- Límites de seguridad (máximo 3 queries, 10 resultados cada una)
+
+### 9. Review Service (Human-in-the-Loop) — ✅ Diseño cuidado
+
+- **Idempotencia por checksum**: no re-aplica la misma corrección dos veces
+- **In-process lock**: previene correcciones concurrentes al mismo row
+- Regenera solo el item flagged, no todo el workflow
+- Limpia flags después de aplicar corrección
+
+---
+
+## Fortalezas Generales
+
+| Aspecto | Evaluación |
+|---|---|
+| **Resiliencia** | Fallbacks en cada agente, retries en Gemini, guards en poller |
+| **Validación** | Zod en todas las capas: env, schemas de agentes, inputs |
+| **Idempotencia** | Upserts con Key, checksums en corrections, claim pattern |
+| **Multi-idioma** | Detección automática + instrucciones al LLM para responder en el mismo idioma |
+| **Configurabilidad** | 40+ env vars, todo paramétrico |
+| **Observabilidad** | Pino logger con timestamps en todos los puntos críticos |
+| **Extensibilidad** | Strategy pattern para Notion providers, factory pattern en agentes |
+| **MCP Standard** | Expone el sistema como servidor MCP para integraciones AI |
+
+---
+
+## Áreas de Mejora
+
+### 🔴 Críticas
+
+1. **`notionService.js` es un God Object** (1703 líneas, 69 funciones)
+   - Dividir en: `notionQueries.js`, `notionUpserts.js`, `notionWowEntities.js`, `notionHelpers.js`
+
+2. **Sin pruebas unitarias ni de integración**
+   - Solo hay un smoke check básico que valida arranque
+   - Los agentes, Gemini service, y el workflow engine necesitan tests
+
+3. **Sin rate limiting propio**
+   - Las llamadas a Notion y Gemini no tienen throttling explícito
+   - Depende solo del retry/fallback reactivo
+
+### 🟡 Importantes
+
+4. **Prompts embebidos como archivos .md** son buenos, pero sin versionado semántico
+   - Si cambias un prompt, no hay forma de trazar qué versión generó qué output
+
+5. **MCP server no es stdio puro**
+   - Usa Express HTTP, lo cual funciona, pero el estándar MCP prefiere stdio para herramientas locales
+   - Puede no ser compatible con todos los clientes MCP
+
+6. **Claims y Feature Matrix pueden crecer mucho**
+   - El schema permite hasta 200 claims y 400 feature matrix items por run
+   - Con muchos competidores, esto puede saturar la API de Notion
+
+7. **Manejo de secretos**
+   - `.env` con credenciales reales está en el directorio — solo `.gitignore` lo protege
+   - No hay integración con secret managers
+
+### 🟢 Menores
+
+8. **`searchQueryBuilder.js` fija "2025" en las queries**
+   - Debería usar el año actual dinámicamente
+
+9. **Notion SDK incluye dos paquetes**: `@google/genai` y `@google/generative-ai`
+   - Solo se usa `@google/genai` — el otro es peso muerto
+
+10. **Express 5.2.1** está en pre-release
+    - Considerar si es intencional o si conviene usar Express 4.x estable
+
+---
+
+## Flujo Completo de Ejecución
+
+```mermaid
+sequenceDiagram
+    participant N as Notion
+    participant P as Poller
+    participant W as Workflow Engine
+    participant IA as Idea Analyzer
+    participant MR as Market Research
+    participant T as Tavily
+    participant G as Gemini
+    participant PP as Product Planner
+    participant MA as Marketing Agent
+
+    P->>N: Query ideas with status=Run/Queued
+    N-->>P: [idea1, idea2, ...]
+    P->>W: runWorkflow(idea1)
+    W->>N: claim idea (set Running)
+    W->>IA: analyze(idea)
+    IA->>G: generate JSON (analysis)
+    G-->>IA: {industry, risks, score...}
+    W->>MR: research(analysis)
+    MR->>T: search web queries
+    T-->>MR: web results
+    MR->>G: generate JSON (competitors, claims...)
+    G-->>MR: {competitors, claims, feature_matrix...}
+    W->>N: upsert evidence, competitors
+    W->>PP: plan(analysis)
+    PP->>G: generate JSON (roadmap)
+    G-->>PP: [{feature, priority...}]
+    W->>N: upsert roadmap
+    W->>MA: market(analysis)
+    MA->>G: generate JSON (marketing)
+    G-->>MA: [{channel, strategy...}]
+    W->>N: upsert marketing, claims, scorecards
+    W->>N: update idea → Done + score + summary
+```
+
+---
+
+## Métricas del Proyecto
+
+| Métrica | Valor |
+|---|---|
+| **Archivos fuente** | 38+ |
+| **Líneas de código (server/)** | ~3,500+ |
+| **Líneas más grandes** | notionService.js (1,703) |
+| **Dependencias producción** | 7 |
+| **Variables de entorno** | 40+ |
+| **Agentes de IA** | 4 |
+| **Schemas Zod** | 5 archivos, ~15 schemas |
+| **MCP Tools** | 10 |
+| **Prompts** | 7 archivos markdown |
+| **Release notes** | 8 versiones documentadas (v0.1.0 → v0.4.0) |
+| **Tests** | Solo smoke check (sin unit/integration tests) |
+
+---
+
+## Conclusión
+
+AI Founder OS es un proyecto **bien arquitectado para su fase de MVP**. El diseño de resiliencia (fallbacks + retries + idempotencia) es maduro para esta etapa. La elección de Notion como UI eliminó frontend sin sacrificar usabilidad.
+
+Las prioridades inmediatas para la siguiente fase serían:
+1. **Dividir `notionService.js`** en módulos más pequeños
+2. **Agregar pruebas unitarias** para agentes y workflow engine
+3. **Implementar rate limiting** explícito para las APIs externas
+4. **Remover `@google/generative-ai`** del package.json (dependencia no utilizada)

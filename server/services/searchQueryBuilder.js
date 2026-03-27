@@ -76,7 +76,7 @@ async function buildSearchQueries({ title, description, analysis }) {
 
   const queries = [
     `${base} competitors alternatives`,
-    `${base} market players 2025`,
+    `${base} market players ${new Date().getFullYear()}`,
   ];
 
   if (looksLikeSaas(`${title || ""} ${description || ""} ${analysis?.monetization || ""}`)) {
